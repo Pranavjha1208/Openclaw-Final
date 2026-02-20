@@ -1,0 +1,21 @@
+{
+  "id": "mongodb",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "uri": {
+        "type": "string",
+        "description": "MongoDB connection URI"
+      },
+      "database": {
+        "type": "string",
+        "description": "Database name"
+      },
+      "collection": {
+        "type": "string",
+        "description": "Default collection name"
+      }
+    }
+  }
+}

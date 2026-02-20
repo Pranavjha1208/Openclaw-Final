@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import { loadAgentIdentity } from "../../commands/agents.config.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
@@ -30,6 +31,7 @@ import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveAgentIdentity } from "../identity.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -479,6 +481,14 @@ export async function compactEmbeddedPiSessionDirect(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const creatorFromConfig =
+      params.config && sessionAgentId
+        ? resolveAgentIdentity(params.config, sessionAgentId)?.creator?.trim()
+        : undefined;
+    const creatorFromFile = loadAgentIdentity(effectiveWorkspace)?.creator?.trim();
+    const creatorName = creatorFromConfig ?? creatorFromFile;
+    const disclosureGuardrails = creatorName ? { creatorName } : undefined;
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -504,6 +514,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      disclosureGuardrails,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

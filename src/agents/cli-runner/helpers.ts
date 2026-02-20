@@ -5,10 +5,12 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { loadAgentIdentity } from "../../commands/agents.config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
+import { resolveAgentIdentity } from "../identity.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
@@ -81,6 +83,14 @@ export function buildSystemPrompt(params: {
     },
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const creatorFromConfig =
+    params.config && params.agentId
+      ? resolveAgentIdentity(params.config, params.agentId)?.creator?.trim()
+      : undefined;
+  const creatorFromFile = loadAgentIdentity(params.workspaceDir)?.creator?.trim();
+  const creatorName = creatorFromConfig ?? creatorFromFile;
+  const disclosureGuardrails = creatorName ? { creatorName } : undefined;
+
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
@@ -98,6 +108,7 @@ export function buildSystemPrompt(params: {
     contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    disclosureGuardrails,
   });
 }
 

@@ -5,6 +5,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { loadAgentIdentity } from "../../../commands/agents.config.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
@@ -32,6 +33,7 @@ import {
 } from "../../channel-tools.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { resolveAgentIdentity } from "../../identity.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
@@ -429,6 +431,13 @@ export async function runEmbeddedAttempt(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const creatorFromConfig =
+      params.config && sessionAgentId
+        ? resolveAgentIdentity(params.config, sessionAgentId)?.creator?.trim()
+        : undefined;
+    const creatorFromFile = loadAgentIdentity(effectiveWorkspace)?.creator?.trim();
+    const creatorName = creatorFromConfig ?? creatorFromFile;
+    const disclosureGuardrails = creatorName ? { creatorName } : undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -455,6 +464,7 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
+      disclosureGuardrails,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({

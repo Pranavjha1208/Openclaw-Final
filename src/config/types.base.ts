@@ -190,4 +190,6 @@ export type IdentityConfig = {
   emoji?: string;
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;
+  /** When set, agent must not disclose backend/database/code/user info and, when asked who created it, say only this name. */
+  creator?: string;
 };

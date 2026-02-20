@@ -347,6 +347,16 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
 }
 
+function isENOENT(err: unknown): boolean {
+  const code =
+    (err as NodeJS.ErrnoException)?.code ?? (err as { cause?: NodeJS.ErrnoException })?.cause?.code;
+  if (code === "ENOENT") {
+    return true;
+  }
+  const msg = String((err as Error)?.message ?? err);
+  return msg.includes("ENOENT") || msg.includes("no such file or directory");
+}
+
 export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
   const patched = patchToolSchemaForClaudeCompatibility(base);
   return {
@@ -357,10 +367,24 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
-      const result = await base.execute(toolCallId, normalized ?? params, signal);
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
-      const normalizedResult = await normalizeReadImageResult(result, filePath);
-      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+      try {
+        const result = await base.execute(toolCallId, normalized ?? params, signal);
+        const normalizedResult = await normalizeReadImageResult(result, filePath);
+        return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+      } catch (err) {
+        if (isENOENT(err)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `File not found: ${filePath}`,
+              },
+            ],
+          };
+        }
+        throw err;
+      }
     },
   };
 }

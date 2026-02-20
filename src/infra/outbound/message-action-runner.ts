@@ -745,7 +745,10 @@ export async function runMessageAction(
   applyTargetToParams({ action, args: params });
   if (actionRequiresTarget(action)) {
     if (!actionHasTarget(action, params)) {
-      throw new Error(`Action ${action} requires a target.`);
+      const hint = input.toolContext?.currentChannelId
+        ? " (session has a channel; ensure message tool was created with currentChannelId for reply-in-session)"
+        : " (provide to/target, or ensure this run has a delivery context so reply target can be inferred)";
+      throw new Error(`Action ${action} requires a target.${hint}`);
     }
   }
 

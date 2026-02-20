@@ -56,7 +56,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { resolveMessageChannel } from "../utils/message-channel.js";
+import { isDeliverableMessageChannel, resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
@@ -297,11 +297,25 @@ export async function agentCommand(
       }
     }
 
-    let resolvedThinkLevel =
-      thinkOnce ??
-      thinkOverride ??
-      persistedThinking ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+    // For deliverable channels (Telegram, WhatsApp, etc.) default to "off" so the first
+    // response is fast; user can use /think or request.thinking for longer reasoning.
+    const messageChannelForThinking = resolveMessageChannel(
+      opts.runContext?.messageChannel ?? opts.messageChannel,
+      opts.replyChannel ?? opts.channel,
+    );
+    const preferFastReply =
+      messageChannelForThinking &&
+      isDeliverableMessageChannel(messageChannelForThinking) &&
+      !thinkOnce &&
+      !thinkOverride &&
+      !persistedThinking;
+
+    let resolvedThinkLevel = preferFastReply
+      ? ("off" as ThinkLevel)
+      : (thinkOnce ??
+        thinkOverride ??
+        persistedThinking ??
+        (agentCfg?.thinkingDefault as ThinkLevel | undefined));
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 

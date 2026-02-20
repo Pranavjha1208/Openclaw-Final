@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  sanitizeCommandNameForTelegram,
+  sanitizeCommandForTelegramApi,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 
@@ -50,6 +52,31 @@ describe("bot-native-command-menu", () => {
     expect(result.issues).toContain('Plugin command "/empty" is missing a description.');
   });
 
+  it("sanitizes command names for Telegram API (hyphens, leading letter)", () => {
+    expect(sanitizeCommandNameForTelegram("export-session")).toBe("export_session");
+    expect(sanitizeCommandNameForTelegram("help")).toBe("help");
+    expect(sanitizeCommandNameForTelegram("dock_telegram")).toBe("dock_telegram");
+    expect(sanitizeCommandNameForTelegram("42")).toBe("c_42");
+    expect(sanitizeCommandNameForTelegram("")).toBe("");
+  });
+
+  it("sanitizes full menu command for Telegram API (description length)", () => {
+    expect(
+      sanitizeCommandForTelegramApi({ command: "export-session", description: "Export session" }),
+    ).toEqual({
+      command: "export_session",
+      description: "Export session",
+    });
+    expect(sanitizeCommandForTelegramApi({ command: "x", description: "" })).toEqual({
+      command: "x",
+      description: "—",
+    });
+    const longDesc = "a".repeat(300);
+    const result = sanitizeCommandForTelegramApi({ command: "help", description: longDesc });
+    expect(result?.description.length).toBe(256);
+    expect(result?.description.endsWith("…")).toBe(true);
+  });
+
   it("deletes stale commands before setting new menu", async () => {
     const callOrder: string[] = [];
     const deleteMyCommands = vi.fn(async () => {
@@ -75,5 +102,35 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(callOrder).toEqual(["delete", "set"]);
+  });
+
+  it("sends sanitized commands to setMyCommands (fixes BOT_COMMAND_INVALID)", async () => {
+    const setMyCommands = vi.fn(async () => undefined);
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: {
+          deleteMyCommands: vi.fn(async () => undefined),
+          setMyCommands,
+        },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {} as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [
+        { command: "export-session", description: "Export session to HTML" },
+        { command: "help", description: "Show help" },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalled();
+    });
+
+    const sent = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toEqual({ command: "export_session", description: "Export session to HTML" });
+    expect(sent[1]).toEqual({ command: "help", description: "Show help" });
   });
 });

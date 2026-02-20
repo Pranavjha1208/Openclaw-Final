@@ -9,6 +9,8 @@ export type AgentIdentityFile = {
   creature?: string;
   vibe?: string;
   avatar?: string;
+  /** When set, agent must not disclose backend/database/code/user info and, when asked who created it, say only this name. */
+  creator?: string;
 };
 
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
@@ -72,6 +74,9 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     }
     if (label === "avatar") {
       identity.avatar = value;
+    }
+    if (label === "creator") {
+      identity.creator = value;
     }
   }
   return identity;

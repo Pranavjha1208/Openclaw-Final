@@ -8,10 +8,52 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 
+/** Telegram API: command 1–32 chars, a-z 0-9 underscore, must start with a letter. */
+const TELEGRAM_COMMAND_API_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+/** Telegram API: description 1–256 chars. */
+export const TELEGRAM_MAX_DESCRIPTION_LENGTH = 256;
+
 export type TelegramMenuCommand = {
   command: string;
   description: string;
 };
+
+/**
+ * Sanitize a command name for Telegram setMyCommands (no hyphens; must start with a letter).
+ * Returns empty string if it cannot be made valid.
+ */
+export function sanitizeCommandNameForTelegram(name: string): string {
+  const trimmed = name.trim().toLowerCase();
+  if (!trimmed) {
+    return "";
+  }
+  const noHyphen = trimmed.replace(/-/g, "_");
+  const validChars = noHyphen.replace(/[^a-z0-9_]/g, "");
+  const startsWithLetter = /^[a-z]/.test(validChars);
+  const base = startsWithLetter ? validChars : `c_${validChars}`;
+  return base.slice(0, 32);
+}
+
+/**
+ * Sanitize one menu command for Telegram API (name + description length).
+ * Returns null if command name would be empty.
+ */
+export function sanitizeCommandForTelegramApi(
+  item: TelegramMenuCommand,
+): TelegramMenuCommand | null {
+  const command = sanitizeCommandNameForTelegram(item.command);
+  if (!command || !TELEGRAM_COMMAND_API_PATTERN.test(command)) {
+    return null;
+  }
+  let description = item.description.trim();
+  if (!description) {
+    description = "—";
+  }
+  if (description.length > TELEGRAM_MAX_DESCRIPTION_LENGTH) {
+    description = description.slice(0, TELEGRAM_MAX_DESCRIPTION_LENGTH - 1) + "…";
+  }
+  return { command, description };
+}
 
 type TelegramPluginCommandSpec = {
   name: string;
@@ -80,6 +122,24 @@ export function syncTelegramMenuCommands(params: {
 }): void {
   const { bot, runtime, commandsToRegister } = params;
   const sync = async () => {
+    // Sanitize for Telegram API (no hyphens; command starts with letter; description ≤256).
+    const seen = new Set<string>();
+    const sanitized: TelegramMenuCommand[] = [];
+    for (const item of commandsToRegister) {
+      const safe = sanitizeCommandForTelegramApi(item);
+      if (!safe) {
+        runtime.log?.(
+          `telegram: skipping invalid menu command "${item.command}" (Telegram: a-z, 0-9, underscore; max 32 chars; must start with letter).`,
+        );
+        continue;
+      }
+      if (seen.has(safe.command)) {
+        continue;
+      }
+      seen.add(safe.command);
+      sanitized.push(safe);
+    }
+
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
     if (typeof bot.api.deleteMyCommands === "function") {
       await withTelegramApiErrorLogging({
@@ -89,14 +149,14 @@ export function syncTelegramMenuCommands(params: {
       }).catch(() => {});
     }
 
-    if (commandsToRegister.length === 0) {
+    if (sanitized.length === 0) {
       return;
     }
 
     await withTelegramApiErrorLogging({
       operation: "setMyCommands",
       runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
+      fn: () => bot.api.setMyCommands(sanitized),
     });
   };
 

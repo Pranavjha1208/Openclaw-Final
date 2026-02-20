@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/mongodb",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "OpenClaw MongoDB CRUD tools plugin – query, insert, update (no delete); dev DB read/insert/update only",
+  "type": "module",
+  "dependencies": {
+    "mongodb": "^6.16.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

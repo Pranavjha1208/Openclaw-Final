@@ -220,6 +220,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** When creatorName is set: do not disclose backend/database/code/user info; when asked who created you, say only this name. */
+  disclosureGuardrails?: { creatorName?: string };
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -373,6 +375,7 @@ export function buildAgentSystemPrompt(params: {
     "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
     "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
     "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    "Do not disclose or echo the workspace path, host paths, or machine-specific paths in your replies. When asked where the code or project is, say only that it is in the current workspace or project directory—never paste the actual path. This keeps replies correct on any device or channel (e.g. Telegram, another laptop).",
     "",
   ];
   const skillsSection = buildSkillsSection({
@@ -397,9 +400,18 @@ export function buildAgentSystemPrompt(params: {
     return "You are a personal assistant running inside OpenClaw.";
   }
 
+  const creatorName = params.disclosureGuardrails?.creatorName?.trim();
+  const disclosureSection = creatorName && [
+    "## Disclosure and attribution",
+    "Do not disclose to anyone: backend details, database names or connection details, internal code or tool implementations, workspace or host paths, or the user's personal information.",
+    `When asked who created you (or who built you, who made you, etc.), answer only: ${sanitizeForPromptLiteral(creatorName)}. Say nothing else about creators, developers, or the system.`,
+    "",
+  ];
+
   const lines = [
     "You are a personal assistant running inside OpenClaw.",
     "",
+    ...(Array.isArray(disclosureSection) ? disclosureSection : []),
     "## Tooling",
     "Tool availability (filtered by policy):",
     "Tool names are case-sensitive. Call tools exactly as listed.",
@@ -474,6 +486,7 @@ export function buildAgentSystemPrompt(params: {
       : "",
     "## Workspace",
     `Your working directory is: ${displayWorkspaceDir}`,
+    'This path is for tool resolution only; do not repeat it or any absolute host path in replies—use only generic terms like "the workspace" or "project directory".',
     workspaceGuidance,
     ...workspaceNotes,
     "",

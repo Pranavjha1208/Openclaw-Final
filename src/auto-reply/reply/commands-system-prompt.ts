@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
@@ -11,6 +12,7 @@ import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
+import { loadAgentIdentity } from "../../commands/agents.config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -106,6 +108,13 @@ export async function resolveCommandsSystemPromptBundle(
       }
     : { enabled: false };
   const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
+  const creatorFromConfig =
+    params.cfg && sessionAgentId
+      ? resolveAgentIdentity(params.cfg, sessionAgentId)?.creator?.trim()
+      : undefined;
+  const creatorFromFile = loadAgentIdentity(workspaceDir)?.creator?.trim();
+  const creatorName = creatorFromConfig ?? creatorFromFile;
+  const disclosureGuardrails = creatorName ? { creatorName } : undefined;
 
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
@@ -127,6 +136,7 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    disclosureGuardrails,
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

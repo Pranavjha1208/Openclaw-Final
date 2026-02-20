@@ -10,7 +10,10 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  INTERNAL_MESSAGE_CHANNEL,
+} from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -606,19 +609,26 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const configured = cfg.agents?.defaults?.thinkingDefault;
-      if (configured) {
-        thinkingLevel = configured;
+      // Prefer fast reply on deliverable channels (Telegram, WhatsApp, etc.) so the
+      // first response is not delayed by thinking; clients can request /think when needed.
+      const sessionChannel = entry?.channel?.trim();
+      if (sessionChannel && isDeliverableMessageChannel(sessionChannel)) {
+        thinkingLevel = "off";
       } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
-        const catalog = await context.loadGatewayModelCatalog();
-        thinkingLevel = resolveThinkingDefault({
-          cfg,
-          provider,
-          model,
-          catalog,
-        });
+        const configured = cfg.agents?.defaults?.thinkingDefault;
+        if (configured) {
+          thinkingLevel = configured;
+        } else {
+          const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+          const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+          const catalog = await context.loadGatewayModelCatalog();
+          thinkingLevel = resolveThinkingDefault({
+            cfg,
+            provider,
+            model,
+            catalog,
+          });
+        }
       }
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;

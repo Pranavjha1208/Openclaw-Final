@@ -545,6 +545,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupChannel: resolvedGroupChannel,
           groupSpace: resolvedGroupSpace,
           currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+          currentChannelId: resolvedTo?.trim() || undefined,
         },
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,

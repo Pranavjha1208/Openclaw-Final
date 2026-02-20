@@ -40,6 +40,7 @@ import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bo
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  sanitizeCommandNameForTelegram,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -419,7 +420,7 @@ export const registerTelegramNativeCommands = ({
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
-        bot.command(command.name, async (ctx: TelegramNativeCommandContext) => {
+        const handler = async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {
             return;
@@ -626,7 +627,12 @@ export const registerTelegramNativeCommands = ({
               ...deliveryBaseOptions,
             });
           }
-        });
+        };
+        bot.command(command.name, handler);
+        const telegramSafe = sanitizeCommandNameForTelegram(command.name);
+        if (telegramSafe && telegramSafe !== command.name.toLowerCase()) {
+          bot.command(telegramSafe, handler);
+        }
       }
 
       for (const pluginCommand of pluginCatalog.commands) {

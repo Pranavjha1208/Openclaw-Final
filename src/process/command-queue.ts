@@ -133,7 +133,7 @@ export function enqueueCommandInLane<T>(
   },
 ): Promise<T> {
   const cleaned = lane.trim() || CommandLane.Main;
-  const warnAfterMs = opts?.warnAfterMs ?? 2_000;
+  const warnAfterMs = opts?.warnAfterMs ?? 15_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     state.queue.push({

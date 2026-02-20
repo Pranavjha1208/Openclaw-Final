@@ -48,6 +48,8 @@ export function buildEmbeddedSystemPrompt(params: {
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
   memoryCitationsMode?: MemoryCitationsMode;
+  /** When creatorName is set: do not disclose backend/database/code/user info; when asked who created you, say only this name. */
+  disclosureGuardrails?: { creatorName?: string };
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -74,6 +76,7 @@ export function buildEmbeddedSystemPrompt(params: {
     userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
     memoryCitationsMode: params.memoryCitationsMode,
+    disclosureGuardrails: params.disclosureGuardrails,
   });
 }
 
