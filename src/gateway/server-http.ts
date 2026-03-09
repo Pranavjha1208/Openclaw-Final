@@ -31,6 +31,8 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { resolveFixitConfig } from "./fixit/config.js";
+import { handleFixitHttpRequest } from "./fixit/http.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -538,6 +540,20 @@ export function createGatewayHttpServer(opts: {
             auth: resolvedAuth,
             trustedProxies,
             rateLimiter,
+          })
+        ) {
+          return;
+        }
+      }
+      const fixitConfig = resolveFixitConfig(configSnapshot);
+      if (
+        fixitConfig &&
+        (requestPath === fixitConfig.basePath || requestPath.startsWith(`${fixitConfig.basePath}/`))
+      ) {
+        if (
+          await handleFixitHttpRequest(req, res, {
+            fixitConfig,
+            loadConfig,
           })
         ) {
           return;

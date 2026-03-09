@@ -54,6 +54,9 @@ export type OpenClawPluginConfigSchema = {
   jsonSchema?: Record<string, unknown>;
 };
 
+/** When set, plugin tools must restrict data access to this org and user (e.g. Fixit gateway). */
+export type FixitScope = { orgId: string; userId: string };
+
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -63,6 +66,8 @@ export type OpenClawPluginToolContext = {
   messageChannel?: string;
   agentAccountId?: string;
   sandboxed?: boolean;
+  /** When set (e.g. Fixit requests), tools must enforce org_id/user_id scoping. */
+  fixitScope?: FixitScope;
 };
 
 export type OpenClawPluginToolFactory = (

@@ -404,8 +404,12 @@ export function applyGoogleTurnOrderingFix(params: {
   const sanitized = sanitizeGoogleTurnOrdering(params.messages);
   const didPrepend = sanitized !== params.messages;
   if (didPrepend && !hasGoogleTurnOrderingMarker(params.sessionManager)) {
-    const warn = params.warn ?? ((message: string) => log.warn(message));
-    warn(`google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`);
+    const message = `google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`;
+    if (params.warn) {
+      params.warn(message);
+    } else {
+      log.debug(message);
+    }
     markGoogleTurnOrderingMarker(params.sessionManager);
   }
   return { messages: sanitized, didPrepend };

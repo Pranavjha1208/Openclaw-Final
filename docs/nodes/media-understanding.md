@@ -190,9 +190,9 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 **Audio**
 
-- `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, or `deepgram/nova-3`.
+- `groq/whisper-large-v3-turbo`, `deepgram/nova-3`, or `google` (OpenAI not in auto order).
 - CLI fallback: `whisper-cli` (whisper-cpp) or `whisper`.
-- Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
+- For even better accuracy, use Deepgram `nova-3` with `smart_format`/`punctuate`; see [Audio](/nodes/audio#better-transcription-accuracy) and [Deepgram](/providers/deepgram).
 
 **Video**
 
@@ -257,7 +257,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       audio: {
         enabled: true,
         models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
+          { provider: "groq", model: "whisper-large-v3-turbo" },
           {
             type: "cli",
             command: "whisper",

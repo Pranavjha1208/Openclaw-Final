@@ -139,6 +139,9 @@ The **installer script** is the recommended way to install OpenClaw. It handles 
 ## Other install methods
 
 <CardGroup cols={2}>
+  <Card title="Deploy steps" href="/install/deploy-steps" icon="terminal">
+    Commands for install deps, build, and run (source, Docker, AWS/VPS).
+  </Card>
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.
   </Card>

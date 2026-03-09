@@ -148,12 +148,14 @@ export const buildTelegramMessageContext = async ({
   resolveTelegramGroupConfig,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
+  const chatId = msg.chat.id;
+  logger.info({ chatId }, "buildTelegramMessageContext start");
+  console.log(`[telegram] buildTelegramMessageContext start chatId=${chatId}`);
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
     direction: "inbound",
   });
-  const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
@@ -179,6 +181,13 @@ export const buildTelegramMessageContext = async ({
     parentPeer,
   });
   const baseSessionKey = route.sessionKey;
+  logger.info(
+    { chatId, agentId: route.agentId, sessionKey: baseSessionKey },
+    "buildTelegramMessageContext route resolved",
+  );
+  console.log(
+    `[telegram] route resolved chatId=${chatId} agentId=${route.agentId} sessionKey=${baseSessionKey}`,
+  );
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadKeys =
@@ -238,10 +247,14 @@ export const buildTelegramMessageContext = async ({
   );
 
   const sendTyping = async () => {
-    await withTelegramApiErrorLogging({
-      operation: "sendChatAction",
-      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
-    });
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
+      });
+    } catch (err) {
+      logVerbose(`telegram typing (sendChatAction) failed for chat ${chatId}: ${String(err)}`);
+    }
   };
 
   const sendRecordVoice = async () => {
@@ -721,6 +734,13 @@ export const buildTelegramMessageContext = async ({
     );
   }
 
+  logger.info(
+    { chatId, agentId: route.agentId, sessionKey },
+    "buildTelegramMessageContext returning context",
+  );
+  console.log(
+    `[telegram] returning context chatId=${chatId} agentId=${route.agentId} sessionKey=${sessionKey}`,
+  );
   return {
     ctxPayload,
     primaryCtx,

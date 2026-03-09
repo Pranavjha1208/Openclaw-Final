@@ -33,6 +33,7 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { parseFixitScopeFrom } from "./agent-runner-utils.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
@@ -432,6 +433,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      ...(parseFixitScopeFrom(sessionCtx) ? { fixitScope: parseFixitScopeFrom(sessionCtx) } : {}),
     },
   };
 

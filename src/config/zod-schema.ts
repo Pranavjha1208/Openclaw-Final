@@ -556,6 +556,25 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        fixit: z
+          .object({
+            enabled: z.boolean().optional(),
+            jwtSecret: z.string().optional().register(sensitive),
+            basePath: z.string().optional(),
+            defaultAgentId: z.string().optional(),
+            orgAgentMapping: z.record(z.string(), z.string()).optional(),
+            cors: z
+              .object({
+                allowOrigins: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            mongoUri: z.string().optional().register(sensitive),
+            mongoDatabase: z.string().optional(),
+            allowDevJwt: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -78,6 +78,8 @@ export type FollowupRun = {
     ownerNumbers?: string[];
     extraSystemPrompt?: string;
     enforceFinalTag?: boolean;
+    /** When set (e.g. Fixit), tools must restrict to this org and user. */
+    fixitScope?: { orgId: string; userId: string };
   };
 };
 

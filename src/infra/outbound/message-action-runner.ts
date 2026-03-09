@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -13,6 +14,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -99,6 +101,8 @@ export type RunMessageActionParams = {
   sessionKey?: string;
   agentId?: string;
   sandboxRoot?: string;
+  /** Additional roots allowed for media paths when they escape sandboxRoot (e.g. shared workspace). */
+  additionalAllowedRoots?: string[];
   dryRun?: boolean;
   abortSignal?: AbortSignal;
 };
@@ -433,6 +437,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
     sandboxRoot: input.sandboxRoot,
+    additionalAllowedRoots: input.additionalAllowedRoots,
   });
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
@@ -759,9 +764,14 @@ export async function runMessageAction(
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
 
+  const additionalAllowedRoots = input.additionalAllowedRoots ?? [
+    path.join(resolveStateDir(), "workspace"),
+  ];
+
   await normalizeSandboxMediaParams({
     args: params,
     sandboxRoot: input.sandboxRoot,
+    additionalAllowedRoots,
   });
 
   await hydrateSendAttachmentParams({
@@ -808,7 +818,7 @@ export async function runMessageAction(
       accountId,
       dryRun,
       gateway,
-      input,
+      input: { ...input, additionalAllowedRoots },
       agentId: resolvedAgentId,
       resolvedTarget,
       abortSignal: input.abortSignal,

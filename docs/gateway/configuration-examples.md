@@ -137,7 +137,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         enabled: true,
         maxBytes: 20971520,
         models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
+          { provider: "groq", model: "whisper-large-v3-turbo" },
           // Optional CLI fallback (Whisper binary):
           // { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }
         ],

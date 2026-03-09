@@ -836,7 +836,7 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer"]
+                "pages": ["install/index", "install/installer", "install/deploy-steps"]
               },
               {
                 "group": "Other install methods",

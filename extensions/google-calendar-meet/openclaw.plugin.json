@@ -1,0 +1,29 @@
+{
+  "id": "google-calendar-meet",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "keyFile": {
+        "type": "string",
+        "description": "Path to service account JSON key file (e.g. your-service-account.json). Alternative to OAuth."
+      },
+      "credentialsJson": {
+        "type": "string",
+        "description": "Service account JSON credentials as string. Alternative to keyFile path."
+      },
+      "clientId": {
+        "type": "string",
+        "description": "Google OAuth 2.0 client ID (Desktop app). For calendar as pranavjhacoc@gmail.com use OAuth."
+      },
+      "clientSecret": {
+        "type": "string",
+        "description": "Google OAuth 2.0 client secret."
+      },
+      "refreshToken": {
+        "type": "string",
+        "description": "OAuth refresh token with Calendar scope. Get via OAuth Playground (scope https://www.googleapis.com/auth/calendar)."
+      }
+    }
+  }
+}

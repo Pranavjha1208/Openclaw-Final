@@ -46,7 +46,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
         enabled: true,
         maxBytes: 20971520,
         models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
+          { provider: "groq", model: "whisper-large-v3-turbo" },
           {
             type: "cli",
             command: "whisper",
@@ -72,7 +72,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
           default: "allow",
           rules: [{ action: "deny", match: { chatType: "group" } }],
         },
-        models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
+        models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
       },
     },
   },
@@ -94,6 +94,32 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+## Better transcription (accuracy)
+
+Auto-detection tries **Groq**, **Deepgram**, then **Google** (no OpenAI by default). For best accuracy:
+
+- **Deepgram Nova 3** — Often best for clarity and multiple languages. Set `DEEPGRAM_API_KEY` and use Deepgram as the first model:
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        providerOptions: {
+          deepgram: { punctuate: true, smart_format: true, detect_language: true },
+        },
+        models: [{ provider: "deepgram", model: "nova-3" }],
+      },
+    },
+  },
+}
+```
+
+- **Groq** — Fast; auto-detected when `GROQ_API_KEY` is set. Model: `whisper-large-v3-turbo`.
+- **OpenAI** — Not in auto order. To use it, add explicitly: `models: [{ provider: "openai", model: "gpt-4o-transcribe" }]`.
+- **Language hint** — Add `language: "hi"` (or `"en"`, etc.) to the model entry when you know the spoken language; some providers use it to improve accuracy.
+
 ## Notes & limits
 
 - Provider auth follows the standard model auth order (auth profiles, env vars, `models.providers.*.apiKey`).
@@ -102,7 +128,6 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
-- OpenAI auto default is `gpt-4o-mini-transcribe`; set `model: "gpt-4o-transcribe"` for higher accuracy.
 - Use `tools.media.audio.attachments` to process multiple voice notes (`mode: "all"` + `maxAttachments`).
 - Transcript is available to templates as `{{Transcript}}`.
 - CLI stdout is capped (5MB); keep CLI output concise.

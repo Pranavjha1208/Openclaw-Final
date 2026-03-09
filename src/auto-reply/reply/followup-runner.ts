@@ -160,6 +160,7 @@ export function createFollowupRunner(params: {
               extraSystemPrompt: queued.run.extraSystemPrompt,
               ownerNumbers: queued.run.ownerNumbers,
               enforceFinalTag: queued.run.enforceFinalTag,
+              fixitScope: queued.run.fixitScope,
               provider,
               model,
               ...authProfile,

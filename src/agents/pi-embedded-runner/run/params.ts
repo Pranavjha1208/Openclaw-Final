@@ -76,6 +76,8 @@ export type RunEmbeddedPiAgentParams = {
   toolResultFormat?: ToolResultFormat;
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
   suppressToolErrorWarnings?: boolean;
+  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org and user. */
+  fixitScope?: { orgId: string; userId: string };
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;

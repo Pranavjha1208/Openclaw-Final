@@ -52,6 +52,14 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     storeAllowFrom: string[],
     options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
   ) => {
+    const chatId = primaryCtx.message?.chat?.id;
+    logger.info(
+      { chatId, allMediaCount: allMedia?.length ?? 0 },
+      "telegram processMessage invoked",
+    );
+    console.log(
+      `[telegram] processMessage invoked chatId=${chatId} allMediaCount=${allMedia?.length ?? 0}`,
+    );
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
@@ -72,8 +80,17 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveTelegramGroupConfig,
     });
     if (!context) {
+      logger.info({ chatId }, "telegram context skipped (null)");
+      console.log(`[telegram] context skipped (null) chatId=${chatId}`);
       return;
     }
+    logger.info(
+      { chatId, agentId: context.route.agentId, sessionKey: context.route.sessionKey },
+      "telegram context built, dispatching to dispatchTelegramMessage",
+    );
+    console.log(
+      `[telegram] context built → dispatch chatId=${chatId} agentId=${context.route.agentId} sessionKey=${context.route.sessionKey}`,
+    );
     await dispatchTelegramMessage({
       context,
       bot,

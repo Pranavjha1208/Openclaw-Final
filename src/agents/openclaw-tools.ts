@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { getFixitScope } from "../infra/fixit-request-scope.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -61,6 +62,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org and user. */
+  fixitScope?: { orgId: string; userId: string };
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -173,6 +176,7 @@ export function createOpenClawTools(options?: {
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       sandboxed: options?.sandboxed,
+      fixitScope: options?.fixitScope ?? getFixitScope(),
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,

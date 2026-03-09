@@ -23,8 +23,8 @@ describe("runCapability auto audio entries", () => {
 
     let seenModel: string | undefined;
     const providerRegistry = buildProviderRegistry({
-      openai: {
-        id: "openai",
+      groq: {
+        id: "groq",
         capabilities: ["audio"],
         transcribeAudio: async (req) => {
           seenModel = req.model;
@@ -36,7 +36,7 @@ describe("runCapability auto audio entries", () => {
     const cfg = {
       models: {
         providers: {
-          openai: {
+          groq: {
             apiKey: "test-key",
             models: [],
           },
@@ -54,7 +54,7 @@ describe("runCapability auto audio entries", () => {
         providerRegistry,
       });
       expect(result.outputs[0]?.text).toBe("ok");
-      expect(seenModel).toBe("gpt-4o-mini-transcribe");
+      expect(seenModel).toBe("whisper-large-v3-turbo");
       expect(result.decision.outcome).toBe("success");
     } finally {
       process.env.PATH = originalPath;
@@ -73,17 +73,17 @@ describe("runCapability auto audio entries", () => {
     const cache = createMediaAttachmentCache(media);
 
     const providerRegistry = buildProviderRegistry({
-      openai: {
-        id: "openai",
+      groq: {
+        id: "groq",
         capabilities: ["audio"],
-        transcribeAudio: async () => ({ text: "ok", model: "whisper-1" }),
+        transcribeAudio: async () => ({ text: "ok", model: "whisper-large-v3-turbo" }),
       },
     });
 
     const cfg = {
       models: {
         providers: {
-          openai: {
+          groq: {
             apiKey: "test-key",
             models: [],
           },

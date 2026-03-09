@@ -1,12 +1,11 @@
 {
-  "name": "@openclaw/mongodb",
+  "name": "@openclaw/google-calendar-meet",
   "version": "2026.2.16",
   "private": true,
-  "description": "OpenClaw MongoDB CRUD tools plugin – query, insert, update (no delete); dev DB read/insert/update only",
+  "description": "OpenClaw plugin: create Google Calendar events with a Google Meet link and send invites to attendees.",
   "type": "module",
   "dependencies": {
-    "mongodb": "^6.16.0",
-    "transliteration": "^2.6.1"
+    "googleapis": "^144.0.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

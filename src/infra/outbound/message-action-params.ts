@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import {
+  assertMediaNotDataUrl,
+  resolveSandboxInputPath,
+  resolveSandboxedMediaSource,
+} from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
 import type {
   ChannelId,
@@ -225,12 +229,31 @@ async function hydrateAttachmentPayload(params: {
   }
 }
 
+/** Resolve media string (path, file://, or ~) to an absolute path for allowed-root checks. */
+function resolveMediaToAbsolutePath(media: string, cwd: string): string {
+  const raw = media.trim();
+  if (/^file:\/\//i.test(raw)) {
+    return fileURLToPath(raw);
+  }
+  return resolveSandboxInputPath(raw, cwd);
+}
+
+function isPathUnderRoot(filePath: string, root: string): boolean {
+  const resolved = path.resolve(filePath);
+  const rootResolved = path.resolve(root);
+  const rel = path.relative(rootResolved, resolved);
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   sandboxRoot?: string;
+  /** Additional roots (e.g. shared workspace) allowed when path escapes sandboxRoot. */
+  additionalAllowedRoots?: string[];
 }): Promise<void> {
   const sandboxRoot = params.sandboxRoot?.trim();
   const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
+  const cwd = sandboxRoot ?? process.cwd();
   for (const key of mediaKeys) {
     const raw = readStringParam(params.args, key, { trim: false });
     if (!raw) {
@@ -240,9 +263,21 @@ export async function normalizeSandboxMediaParams(params: {
     if (!sandboxRoot) {
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
-    if (normalized !== raw) {
-      params.args[key] = normalized;
+    try {
+      const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+      if (normalized !== raw) {
+        params.args[key] = normalized;
+      }
+    } catch (err) {
+      const roots = params.additionalAllowedRoots?.filter((r) => r?.trim());
+      if (roots?.length) {
+        const absolute = resolveMediaToAbsolutePath(raw, cwd);
+        if (roots.some((root) => isPathUnderRoot(absolute, root))) {
+          params.args[key] = absolute;
+          continue;
+        }
+      }
+      throw err;
     }
   }
 }
@@ -250,8 +285,11 @@ export async function normalizeSandboxMediaParams(params: {
 export async function normalizeSandboxMediaList(params: {
   values: string[];
   sandboxRoot?: string;
+  /** Additional roots (e.g. shared workspace) allowed when path escapes sandboxRoot. */
+  additionalAllowedRoots?: string[];
 }): Promise<string[]> {
   const sandboxRoot = params.sandboxRoot?.trim();
+  const cwd = sandboxRoot ?? process.cwd();
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const value of params.values) {
@@ -260,9 +298,26 @@ export async function normalizeSandboxMediaList(params: {
       continue;
     }
     assertMediaNotDataUrl(raw);
-    const resolved = sandboxRoot
-      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
-      : raw;
+    let resolved: string;
+    if (!sandboxRoot) {
+      resolved = raw;
+    } else {
+      try {
+        resolved = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+      } catch (err) {
+        const roots = params.additionalAllowedRoots?.filter((r) => r?.trim());
+        if (roots?.length) {
+          const absolute = resolveMediaToAbsolutePath(raw, cwd);
+          if (roots.some((root) => isPathUnderRoot(absolute, root))) {
+            resolved = absolute;
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
+    }
     if (seen.has(resolved)) {
       continue;
     }

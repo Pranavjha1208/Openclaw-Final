@@ -15,6 +15,26 @@
       "collection": {
         "type": "string",
         "description": "Default collection name"
+      },
+      "serverSelectionTimeoutMS": {
+        "type": "number",
+        "description": "MongoDB server selection timeout (ms); default 30000"
+      },
+      "connectTimeoutMS": {
+        "type": "number",
+        "description": "MongoDB connect timeout (ms); default 30000"
+      },
+      "defaultOrgId": {
+        "type": "string",
+        "description": "Default org_id for mongo_save_lead (default: ORG_DEMO)"
+      },
+      "defaultUserId": {
+        "type": "string",
+        "description": "Default user_id for mongo_save_lead (default: USER_DEMO)"
+      },
+      "defaultCampaignId": {
+        "type": "string",
+        "description": "Default campaign_id for mongo_save_lead (default: CAMPAIGN_DEMO)"
       }
     }
   }

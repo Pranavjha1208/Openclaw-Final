@@ -55,6 +55,7 @@ const runDryAction = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  additionalAllowedRoots?: string[];
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -64,6 +65,7 @@ const runDryAction = (params: {
     dryRun: true,
     abortSignal: params.abortSignal,
     sandboxRoot: params.sandboxRoot,
+    additionalAllowedRoots: params.additionalAllowedRoots,
   });
 
 const runDrySend = (params: {
@@ -72,6 +74,7 @@ const runDrySend = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  additionalAllowedRoots?: string[];
 }) =>
   runDryAction({
     ...params,
@@ -597,6 +600,33 @@ describe("runMessageAction sandboxed media validation", () => {
         },
       }),
     ).rejects.toThrow(/data:/i);
+  });
+
+  it("allows media under additionalAllowedRoots when path escapes sandbox", async () => {
+    await withSandbox(async (sandboxDir) => {
+      const workspaceDir = path.join(path.dirname(sandboxDir), "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const fileInWorkspace = path.join(workspaceDir, "leads_export.csv");
+      await fs.writeFile(fileInWorkspace, "a,b\n1,2", "utf-8");
+
+      const result = await runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: fileInWorkspace,
+          message: "Export attached.",
+        },
+        sandboxRoot: sandboxDir,
+        additionalAllowedRoots: [workspaceDir],
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(fileInWorkspace);
+    });
   });
 });
 

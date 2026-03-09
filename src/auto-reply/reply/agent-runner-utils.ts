@@ -135,11 +135,35 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
+/** Parse Fixit identity from From (format "fixit:orgId:userId"). */
+export function parseFixitScopeFrom(ctx: {
+  Provider?: string;
+  From?: string;
+}): { orgId: string; userId: string } | undefined {
+  const provider = ctx.Provider?.trim().toLowerCase();
+  const from = ctx.From?.trim();
+  if (provider !== "fixit" || !from?.startsWith("fixit:")) {
+    return undefined;
+  }
+  const rest = from.slice(6);
+  const colon = rest.indexOf(":");
+  if (colon <= 0) {
+    return undefined;
+  }
+  const orgId = rest.slice(0, colon).trim();
+  const userId = rest.slice(colon + 1).trim();
+  if (!orgId || !userId) {
+    return undefined;
+  }
+  return { orgId, userId };
+}
+
 export function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
+  const fixitScope = parseFixitScopeFrom(params.sessionCtx);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -148,6 +172,7 @@ export function buildEmbeddedContextFromTemplate(params: {
     agentAccountId: params.sessionCtx.AccountId,
     messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    ...(fixitScope ? { fixitScope } : {}),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,

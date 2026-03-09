@@ -77,6 +77,7 @@ export function registerGatewayCli(program: Command) {
     program
       .command("gateway")
       .description("Run, inspect, and query the WebSocket Gateway")
+      .allowExcessArguments(true)
       .addHelpText(
         "after",
         () =>
@@ -90,7 +91,10 @@ export function registerGatewayCli(program: Command) {
   );
 
   addGatewayRunCommand(
-    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+    gateway
+      .command("run")
+      .description("Run the WebSocket Gateway (foreground)")
+      .allowExcessArguments(true),
   );
 
   addGatewayServiceCommands(gateway, {

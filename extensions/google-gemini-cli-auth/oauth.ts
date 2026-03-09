@@ -9,7 +9,8 @@ const CLIENT_SECRET_KEYS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ];
-const REDIRECT_URI = "http://localhost:8085/oauth2callback";
+const REDIRECT_URI =
+  process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim() || "http://127.0.0.1:19522/oauth-callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json";
@@ -237,9 +238,10 @@ async function waitForLocalCallback(params: {
   timeoutMs: number;
   onProgress?: (message: string) => void;
 }): Promise<{ code: string; state: string }> {
-  const port = 8085;
-  const hostname = "localhost";
-  const expectedPath = "/oauth2callback";
+  const redirectUrl = new URL(REDIRECT_URI);
+  const port = redirectUrl.port ? Number(redirectUrl.port) : 19522;
+  const hostname = redirectUrl.hostname || "127.0.0.1";
+  const expectedPath = redirectUrl.pathname || "/oauth-callback";
 
   return new Promise<{ code: string; state: string }>((resolve, reject) => {
     let timeout: NodeJS.Timeout | null = null;
@@ -575,7 +577,7 @@ export async function loginGeminiCliOAuth(
       : [
           "Browser will open for Google authentication.",
           "Sign in with your Google account for Gemini CLI access.",
-          "The callback will be captured automatically on localhost:8085.",
+          `The callback will be captured automatically on ${REDIRECT_URI}.`,
         ].join("\n"),
     "Gemini CLI OAuth",
   );

@@ -212,6 +212,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org and user. */
+  fixitScope?: { orgId: string; userId: string };
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -446,6 +448,7 @@ export function createOpenClawCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
+      fixitScope: options?.fixitScope,
     }),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)

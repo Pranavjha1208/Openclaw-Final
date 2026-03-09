@@ -148,6 +148,14 @@ export const registerTelegramHandlers = ({
       if (!last) {
         return;
       }
+      const cid = last.ctx.message.chat.id;
+      logger.info(
+        { chatId: cid, messageId: last.msg.message_id, entriesCount: entries.length },
+        "telegram debounce flush, dispatching to processMessage",
+      );
+      console.log(
+        `[telegram] debounce flush → processMessage chatId=${cid} messageId=${last.msg.message_id} entries=${entries.length}`,
+      );
       if (entries.length === 1) {
         await processMessage(last.ctx, last.allMedia, last.storeAllowFrom);
         return;
@@ -258,6 +266,14 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      const mcid = primaryEntry.ctx.message.chat.id;
+      logger.info(
+        { chatId: mcid, mediaCount: allMedia.length },
+        "telegram media group, dispatching to processMessage",
+      );
+      console.log(
+        `[telegram] media group → processMessage chatId=${mcid} mediaCount=${allMedia.length}`,
+      );
       const storeAllowFrom = await loadStoreAllowFrom();
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
     } catch (err) {
@@ -275,6 +291,14 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const fcid = first.ctx.message.chat.id;
+      logger.info(
+        { chatId: fcid, fragmentsCount: entry.messages.length },
+        "telegram text fragments flush, dispatching to processMessage",
+      );
+      console.log(
+        `[telegram] text fragments flush → processMessage chatId=${fcid} fragments=${entry.messages.length}`,
+      );
       const combinedText = entry.messages.map((m) => m.msg.text ?? "").join("");
       if (!combinedText.trim()) {
         return;
@@ -540,6 +564,14 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning,
       oversizeLogMessage,
     } = params;
+
+    logger.info(
+      { chatId, messageId: msg.message_id, resolvedThreadId },
+      "telegram processInboundMessage start",
+    );
+    console.log(
+      `[telegram] processInboundMessage start chatId=${chatId} messageId=${msg.message_id} resolvedThreadId=${resolvedThreadId ?? "—"}`,
+    );
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
@@ -1085,6 +1117,20 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      logger.info(
+        {
+          chatId,
+          messageId: msg.message_id,
+          hasText: Boolean((msg.text ?? msg.caption)?.trim()),
+          hasMedia: Boolean(
+            msg.photo ?? msg.video ?? msg.voice ?? msg.audio ?? msg.document ?? msg.media_group_id,
+          ),
+        },
+        "telegram message received",
+      );
+      console.log(
+        `[telegram] message received chatId=${chatId} messageId=${msg.message_id} hasText=${Boolean((msg.text ?? msg.caption)?.trim())} hasMedia=${Boolean(msg.photo ?? msg.video ?? msg.voice ?? msg.audio ?? msg.document ?? msg.media_group_id)}`,
+      );
       await processInboundMessage({
         ctx,
         msg,
@@ -1115,6 +1161,8 @@ export const registerTelegramHandlers = ({
       }
 
       const chatId = post.chat.id;
+      logger.info({ chatId, messageId: post.message_id }, "telegram channel_post received");
+      console.log(`[telegram] channel_post received chatId=${chatId} messageId=${post.message_id}`);
 
       // Use the full group allow-from context for access control (same as message handler)
       const groupAllowContext = await resolveTelegramGroupAllowFromContext({

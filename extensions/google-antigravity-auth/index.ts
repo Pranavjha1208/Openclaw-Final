@@ -8,13 +8,28 @@ import {
   type ProviderAuthContext,
 } from "openclaw/plugin-sdk";
 
-// OAuth constants - decoded from pi-ai's base64 encoded values to stay in sync
-const decode = (s: string) => Buffer.from(s, "base64").toString();
-const CLIENT_ID = decode(
-  "MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
-);
-const CLIENT_SECRET = decode("R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQWY=");
-const REDIRECT_URI = "http://localhost:51121/oauth-callback";
+// OAuth: client id/secret must be set via env (no secrets in repo)
+function getClientId(): string {
+  const id = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
+  if (!id) {
+    throw new Error(
+      "GOOGLE_OAUTH_CLIENT_ID is required for google-antigravity-auth. Set it in your environment or gateway config.",
+    );
+  }
+  return id;
+}
+function getClientSecret(): string {
+  const secret = process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
+  if (!secret) {
+    throw new Error(
+      "GOOGLE_OAUTH_CLIENT_SECRET is required for google-antigravity-auth. Set it in your environment or gateway config.",
+    );
+  }
+  return secret;
+}
+
+const REDIRECT_URI =
+  process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim() || "http://127.0.0.1:19522/oauth-callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DEFAULT_PROJECT_ID = "rising-fact-p41fc";
@@ -59,7 +74,7 @@ function shouldUseManualOAuthFlow(isRemote: boolean): boolean {
 
 function buildAuthUrl(params: { challenge: string; state: string }): string {
   const url = new URL(AUTH_URL);
-  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("client_id", getClientId());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", REDIRECT_URI);
   url.searchParams.set("scope", SCOPES.join(" "));
@@ -95,7 +110,7 @@ function parseCallbackInput(input: string): { code: string; state: string } | { 
 
 async function startCallbackServer(params: { timeoutMs: number }) {
   const redirect = new URL(REDIRECT_URI);
-  const port = redirect.port ? Number(redirect.port) : 51121;
+  const port = redirect.port ? Number(redirect.port) : 19522;
 
   let settled = false;
   let resolveCallback: (url: URL) => void;
@@ -175,8 +190,8 @@ async function exchangeCode(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
+      client_id: getClientId(),
+      client_secret: getClientSecret(),
       code: params.code,
       grant_type: "authorization_code",
       redirect_uri: REDIRECT_URI,

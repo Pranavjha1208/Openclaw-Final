@@ -13,7 +13,7 @@ Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook
 ## Prereqs
 
 - `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
-- `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
+- `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)). If `gog auth add` fails with **redirect_uri_mismatch**, add the exact redirect URI from the error to your OAuth client's Authorized redirect URIs in Google Cloud Console; gog uses a different port each run, so add several URIs (e.g. `http://127.0.0.1:56557/oauth2/callback`, `http://127.0.0.1:57512/oauth2/callback`) or use a Desktop OAuth client. See the gog skill (Troubleshooting) for details.
 - OpenClaw hooks enabled (see [Webhooks](/automation/webhook)).
 - `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
   Other tunnel services can work, but are DIY/unsupported and require manual wiring.

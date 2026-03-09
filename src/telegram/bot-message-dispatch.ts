@@ -17,6 +17,7 @@ import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { getChildLogger } from "../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -71,6 +72,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   opts,
 }: DispatchTelegramMessageParams) => {
+  const logger = getChildLogger({ module: "telegram-dispatch" });
   const {
     ctxPayload,
     msg,
@@ -88,6 +90,14 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
   } = context;
+
+  logger.info(
+    { chatId, agentId: route.agentId, sessionKey: route.sessionKey },
+    "dispatchTelegramMessage start",
+  );
+  console.log(
+    `[telegram] dispatchTelegramMessage start chatId=${chatId} agentId=${route.agentId} sessionKey=${route.sessionKey}`,
+  );
 
   const draftMaxChars = Math.min(textLimit, 4096);
   const accountBlockStreamingEnabled =
@@ -292,6 +302,11 @@ export const dispatchTelegramMessage = async ({
   };
 
   let queuedFinal = false;
+  logger.info(
+    { chatId, sessionKey: route.sessionKey },
+    "dispatchTelegramMessage invoking reply pipeline",
+  );
+  console.log(`[telegram] invoking reply pipeline chatId=${chatId} sessionKey=${route.sessionKey}`);
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,

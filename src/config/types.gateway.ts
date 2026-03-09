@@ -318,4 +318,29 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /** Fixit chatbot REST + SSE integration (dashboard UI). */
+  fixit?: GatewayFixitConfig;
+};
+
+export type GatewayFixitConfig = {
+  /** Enable Fixit API endpoints under basePath. Default: false. */
+  enabled?: boolean;
+  /** JWT secret for verifying Fixit tokens (or set FIXIT_JWT_SECRET). */
+  jwtSecret?: string;
+  /** Base path for Fixit API (default: /api/fixit). */
+  basePath?: string;
+  /** Default agent id for Fixit sessions. Default: main. */
+  defaultAgentId?: string;
+  /** Optional per-org agent id mapping. */
+  orgAgentMapping?: Record<string, string>;
+  /** CORS allowed origins for Fixit endpoints. */
+  cors?: {
+    allowOrigins?: string[];
+  };
+  /** MongoDB URI for dual-write to f_user_sessions/f_user_messages (same DB as MongoDB plugin). */
+  mongoUri?: string;
+  /** MongoDB database name. Default: fixit_whatsapp_agent_dev. */
+  mongoDatabase?: string;
+  /** Allow POST /api/fixit/dev/jwt to issue test JWTs (testing only; default false). */
+  allowDevJwt?: boolean;
 };
