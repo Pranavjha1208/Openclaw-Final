@@ -23,15 +23,19 @@ import {
   getOrCreateFixitSession,
   recordFixitMessage,
   closeFixitMongoClient,
+  loadFullAgentContext,
   type GetOrCreateFixitSessionResult,
 } from "./mongo-sync.js";
 import { buildFixitSessionKeyForIdentity } from "./session.js";
 import type {
+  FixitChannelType,
   FixitChatSendBody,
   FixitSseEvent,
   FixitAuthVerifyResponse,
   FixitChatAbortBody,
 } from "./types.js";
+
+const FIXIT_UI_CHANNEL: FixitChannelType = "ui";
 
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -93,6 +97,7 @@ export async function handleFixitHttpRequest(
     const raw = bodyResult.value as Record<string, unknown>;
     const orgId = typeof raw?.orgId === "string" ? raw.orgId.trim() : "";
     const userId = typeof raw?.userId === "string" ? raw.userId.trim() : "";
+    const campaignId = typeof raw?.campaignId === "string" ? raw.campaignId.trim() : "";
     if (!orgId || !userId) {
       sendJson(res, 400, { error: "orgId and userId are required" });
       return true;
@@ -104,9 +109,14 @@ export async function handleFixitHttpRequest(
       org_name: typeof raw?.orgName === "string" ? raw.orgName : "Org",
       user_name: typeof raw?.userName === "string" ? raw.userName : "User",
       exp: Math.floor(Date.now() / 1000) + 24 * 3600,
+      ...(campaignId ? { campaign_id: campaignId } : {}),
     };
     const token = signFixitJwt(payload, fixitConfig.jwtSecret);
-    console.log(`[fixit] dev/jwt issued for org=${orgId} user=${userId}`);
+    console.log(
+      `[fixit] dev/jwt issued for org=${orgId} user=${userId}${
+        campaignId ? ` campaign=${campaignId}` : ""
+      }`,
+    );
     sendJson(res, 200, { token });
     return true;
   }
@@ -187,6 +197,7 @@ export async function handleFixitHttpRequest(
       orgName: identity.orgName,
       userName: identity.userName,
       role: identity.role,
+      campaignId: identity.campaignId,
     };
     sendJson(res, 200, body);
     return true;
@@ -224,6 +235,7 @@ export async function handleFixitHttpRequest(
         fixitConfig.mongoUri,
         fixitConfig.mongoDatabase,
         sessionId,
+        FIXIT_UI_CHANNEL,
       );
     } catch (err) {
       sendJson(res, 500, { error: "Failed to get or create session", details: String(err) });
@@ -239,6 +251,7 @@ export async function handleFixitHttpRequest(
           message,
           messageType: "text",
           messageOwner: "user",
+          channelType: FIXIT_UI_CHANNEL,
         },
         fixitConfig.mongoUri,
         fixitConfig.mongoDatabase,
@@ -248,9 +261,22 @@ export async function handleFixitHttpRequest(
       return true;
     }
 
+    // Load all context in parallel: workspace + session history + cross-session
+    let agentCtxData;
+    try {
+      agentCtxData = await loadFullAgentContext(
+        identity,
+        sessionObjectId,
+        fixitConfig.mongoUri,
+        fixitConfig.mongoDatabase,
+      );
+    } catch (err) {
+      console.warn("[fixit] context loading failed, proceeding with defaults:", err);
+    }
+
     const runId = randomUUID();
     console.log(
-      `[fixit] chat/send: message="${message.slice(0, 60)}" session=${sessionUuid.slice(0, 8)} runId=${runId.slice(0, 8)}`,
+      `[fixit] chat/send: message="${message.slice(0, 60)}" session=${sessionUuid.slice(0, 8)} runId=${runId.slice(0, 8)} workspace=${agentCtxData?.workspace.status ?? "unknown"} history=${agentCtxData?.sessionHistory.length ?? 0}+${agentCtxData?.crossSessionHistory.length ?? 0}`,
     );
     const abortController = new AbortController();
     runIdToAbort.set(runId, {
@@ -323,58 +349,71 @@ export async function handleFixitHttpRequest(
       runIdToAbort.delete(runId);
     });
 
-    void runWithFixitScope({ orgId: identity.orgId, userId: identity.userId }, async () => {
-      try {
-        await dispatchInboundMessage({
-          ctx: {
-            Body: message,
-            SessionKey: sessionKey,
-            Provider: "fixit",
-            Surface: "fixit-web",
-            OriginatingChannel: "fixit",
-            From: `fixit:${identity.orgId}:${identity.userId}`,
-            GroupSystemPrompt: buildFixitAgentContext(identity),
-          },
-          cfg,
-          dispatcher,
-          replyOptions: {
-            runId,
-            abortSignal: abortController.signal,
-            disableBlockStreaming: true,
-          },
-        });
-      } catch (err) {
-        if (!doneSent) {
-          doneSent = true;
-          runIdToAbort.delete(runId);
-          writeFixitSseEvent(res, { type: "error", error: String(err) });
-          res.end();
-        }
-        return;
-      } finally {
-        unsubscribe();
-      }
-
-      try {
-        if (fullText.trim()) {
-          await recordFixitMessage(
-            {
-              userId: identity.userId,
-              sessionObjectId,
-              message: fullText.trim(),
-              messageType: "text",
-              messageOwner: "assistant",
+    void runWithFixitScope(
+      {
+        orgId: identity.orgId,
+        userId: identity.userId,
+        ...(identity.campaignId ? { campaignId: identity.campaignId } : {}),
+      },
+      async () => {
+        try {
+          await dispatchInboundMessage({
+            ctx: {
+              Body: message,
+              SessionKey: sessionKey,
+              Provider: "fixit",
+              Surface: "fixit-web",
+              OriginatingChannel: "fixit",
+              From: `fixit:${identity.orgId}:${identity.userId}`,
+              GroupSystemPrompt: buildFixitAgentContext({
+                identity,
+                workspace: agentCtxData?.workspace,
+                sessionHistory: agentCtxData?.sessionHistory,
+                crossSessionHistory: agentCtxData?.crossSessionHistory,
+              }),
             },
-            fixitConfig.mongoUri,
-            fixitConfig.mongoDatabase,
-          );
+            cfg,
+            dispatcher,
+            replyOptions: {
+              runId,
+              abortSignal: abortController.signal,
+              disableBlockStreaming: true,
+            },
+          });
+        } catch (err) {
+          if (!doneSent) {
+            doneSent = true;
+            runIdToAbort.delete(runId);
+            writeFixitSseEvent(res, { type: "error", error: String(err) });
+            res.end();
+          }
+          return;
+        } finally {
+          unsubscribe();
         }
-      } catch {
-        // best-effort; response already streamed
-      }
 
-      sendDone();
-    });
+        try {
+          if (fullText.trim()) {
+            await recordFixitMessage(
+              {
+                userId: identity.userId,
+                sessionObjectId,
+                message: fullText.trim(),
+                messageType: "text",
+                messageOwner: "assistant",
+                channelType: FIXIT_UI_CHANNEL,
+              },
+              fixitConfig.mongoUri,
+              fixitConfig.mongoDatabase,
+            );
+          }
+        } catch {
+          // best-effort; response already streamed
+        }
+
+        sendDone();
+      },
+    );
     return true;
   }
 
@@ -408,7 +447,7 @@ export async function handleFixitHttpRequest(
       const db = await getFixitDb(fixitConfig.mongoUri, fixitConfig.mongoDatabase);
       const cursor = db
         .collection("f_user_sessions")
-        .find({ user_id: identity.userId })
+        .find({ user_id: identity.userId, channel_type: FIXIT_UI_CHANNEL })
         .toSorted({ updated_at: -1 })
         .limit(50);
       const sessions = await cursor.toArray();
@@ -417,6 +456,7 @@ export async function handleFixitHttpRequest(
         start_time?: Date;
         end_time?: Date | null;
         updated_at?: Date;
+        channel_type?: string;
         metadata?: Record<string, unknown>;
       };
       sendJson(res, 200, {
@@ -425,6 +465,7 @@ export async function handleFixitHttpRequest(
           startTime: (s.start_time as Date)?.toISOString?.() ?? new Date().toISOString(),
           endTime: (s.end_time as Date)?.toISOString?.() ?? null,
           updatedAt: (s.updated_at as Date)?.toISOString?.() ?? new Date().toISOString(),
+          channelType: s.channel_type ?? FIXIT_UI_CHANNEL,
           metadata: s.metadata ?? {},
         })),
       });
@@ -451,6 +492,7 @@ export async function handleFixitHttpRequest(
       const sessionDoc = await db.collection("f_user_sessions").findOne({
         user_id: identity.userId,
         session_id: sessionId,
+        channel_type: FIXIT_UI_CHANNEL,
       });
       if (!sessionDoc) {
         sendJson(res, 200, { messages: [], sessionId });
@@ -466,6 +508,7 @@ export async function handleFixitHttpRequest(
         message?: string;
         message_owner?: string;
         message_type?: string;
+        channel_type?: string;
         created_at?: Date;
       };
       sendJson(res, 200, {
@@ -473,6 +516,7 @@ export async function handleFixitHttpRequest(
           message: m.message,
           messageOwner: m.message_owner,
           messageType: m.message_type ?? "text",
+          channelType: m.channel_type ?? FIXIT_UI_CHANNEL,
           createdAt: (m.created_at as Date)?.toISOString?.() ?? new Date().toISOString(),
         })),
         sessionId,
@@ -494,6 +538,7 @@ export async function handleFixitHttpRequest(
         fixitConfig.mongoUri,
         fixitConfig.mongoDatabase,
         newSessionId,
+        FIXIT_UI_CHANNEL,
       );
       sendJson(res, 200, { sessionId: result.sessionUuid });
     } catch (err) {
@@ -515,7 +560,7 @@ export async function handleFixitHttpRequest(
       const r = await db
         .collection("f_user_sessions")
         .updateOne(
-          { user_id: identity.userId, session_id: id },
+          { user_id: identity.userId, session_id: id, channel_type: FIXIT_UI_CHANNEL },
           { $set: { end_time: new Date(), updated_at: new Date() } },
         );
       sendJson(res, 200, { ok: true, updated: r.modifiedCount > 0 });

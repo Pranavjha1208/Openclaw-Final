@@ -262,7 +262,7 @@ IMPORTANT: If you are unsure which collection a field belongs to, check the sche
 // Generic labels in tool descriptions.
 const DESC_DATABASE = "the configured database";
 const COLLECTION_LIST =
-  "d_lead (default), d_lead_crm, f_lead_status, f_lead_call, f_lead_whatsapp, d_org, d_user, d_campaign, d_reachout_flow, d_plan, d_payments, d_schedules, d_brochure, d_follow_up_batch, d_user_prompt, d_validated_user, d_whatsapp_template, d_whatsapp_followup, d_whatsapp_analytics, d_providers, f_call_records, f_lead_sessions, f_lead_messages, f_user_sessions, f_user_messages, f_user_feedback, f_lead_feedback, f_automation_test_results, c_crm_config, c_valid_numbers, c_calling_number, c_call_monitor, o_cron_jobs, elevenlabs_voices";
+  "d_lead (default), d_lead_crm, f_lead_status, f_lead_call, f_lead_whatsapp, d_org, d_user, d_campaign, d_reachout_flow, d_plan, d_payments, d_schedules, d_brochure, d_follow_up_batch, d_user_prompt, d_validated_user, d_whatsapp_template, d_whatsapp_followup, d_whatsapp_analytics, d_providers, f_call_records, f_lead_sessions, f_lead_messages, f_user_sessions, f_user_messages, f_user_workspace, f_user_feedback, f_lead_feedback, f_automation_test_results, c_crm_config, c_valid_numbers, c_calling_number, c_call_monitor, o_cron_jobs, elevenlabs_voices";
 
 // All collections in the dev database. No delete tool is exposed; dev DB is read/insert/update only.
 const ALLOWED_COLLECTIONS = [
@@ -291,6 +291,7 @@ const ALLOWED_COLLECTIONS = [
   "f_lead_messages",
   "f_user_sessions",
   "f_user_messages",
+  "f_user_workspace",
   "f_user_feedback",
   "f_lead_feedback",
   "f_automation_test_results",
@@ -356,6 +357,7 @@ const ORG_SCOPED_COLLECTIONS = new Set([
   "f_lead_messages",
   "f_user_feedback",
   "f_lead_feedback",
+  "f_user_workspace",
   "c_crm_config",
   "o_cron_jobs",
 ]);
@@ -366,15 +368,23 @@ export type LeadDefaults = {
   campaign_id: string;
 };
 
-export type FixitScope = { orgId: string; userId: string };
+export type FixitScope = { orgId: string; userId: string; campaignId?: string };
 
+/** When fixitScope is set, enforce org_id, user_id, and (when present) campaign_id so queries only return data for that org/user/campaign. */
 function mergeScopeIntoFilter(
   col: string,
   filter: Record<string, unknown>,
   scope: FixitScope,
 ): Record<string, unknown> {
   if (col === "d_lead" || ORG_SCOPED_COLLECTIONS.has(col)) {
-    return { $and: [filter, { org_id: scope.orgId }] };
+    const scopeMatch: Record<string, unknown> = {
+      org_id: scope.orgId,
+      user_id: scope.userId,
+    };
+    if (scope.campaignId) {
+      scopeMatch.campaign_id = scope.campaignId;
+    }
+    return { $and: [filter, scopeMatch] };
   }
   return filter;
 }
@@ -387,7 +397,13 @@ function ensurePipelineScope(
   if (collection !== "d_lead" && !ORG_SCOPED_COLLECTIONS.has(collection)) {
     return pipeline;
   }
-  const scopeMatch = { org_id: scope.orgId };
+  const scopeMatch: Record<string, unknown> = {
+    org_id: scope.orgId,
+    user_id: scope.userId,
+  };
+  if (scope.campaignId) {
+    scopeMatch.campaign_id = scope.campaignId;
+  }
   if (
     pipeline.length > 0 &&
     typeof pipeline[0] === "object" &&
@@ -411,7 +427,11 @@ function createMongoTools(
   fixitScope?: FixitScope,
 ): AnyAgentTool[] {
   if (fixitScope) {
-    console.log(`[mongodb] fixitScope enforced: org=${fixitScope.orgId}`);
+    console.log(
+      `[mongodb] fixitScope enforced: org=${fixitScope.orgId} user=${fixitScope.userId}${
+        fixitScope.campaignId ? ` campaign=${fixitScope.campaignId}` : ""
+      }`,
+    );
   }
   const getClientWithOpts = () => getClient(uri, clientOptions);
   const orgId = fixitScope?.orgId ?? leadDefaults?.org_id ?? DEFAULT_LEAD_ORG_ID;

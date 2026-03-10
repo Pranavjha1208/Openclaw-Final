@@ -6,7 +6,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-export type FixitRequestScope = { orgId: string; userId: string };
+export type FixitRequestScope = { orgId: string; userId: string; campaignId?: string };
 
 const fixitScopeStorage = new AsyncLocalStorage<FixitRequestScope>();
 

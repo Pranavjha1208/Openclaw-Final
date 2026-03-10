@@ -70,7 +70,13 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+} from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
@@ -269,7 +275,7 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+    const { bootstrapFiles: rawBootstrapFiles, contextFiles: rawContextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
@@ -277,6 +283,25 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
       });
+
+    // Fixit sessions use DB-backed workspace (f_user_workspace) instead of filesystem.
+    // Strip filesystem IDENTITY/SOUL/AGENTS so old data doesn't leak into the prompt.
+    const FIXIT_SKIP_BOOTSTRAP = new Set([
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ]);
+    const hookAdjustedBootstrapFiles = params.fixitScope
+      ? rawBootstrapFiles.filter((f) => !FIXIT_SKIP_BOOTSTRAP.has(f.name))
+      : rawBootstrapFiles;
+    const contextFiles = params.fixitScope
+      ? rawContextFiles.filter((f) => {
+          const baseName = f.path.split("/").pop() ?? f.path;
+          return !FIXIT_SKIP_BOOTSTRAP.has(baseName);
+        })
+      : rawContextFiles;
+
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )

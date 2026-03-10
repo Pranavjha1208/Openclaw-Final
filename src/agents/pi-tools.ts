@@ -212,8 +212,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org and user. */
-  fixitScope?: { orgId: string; userId: string };
+  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org/user (and optionally campaign). */
+  fixitScope?: { orgId: string; userId: string; campaignId?: string };
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;

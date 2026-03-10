@@ -16,6 +16,7 @@ export function signFixitJwt(
   payload: {
     org_id: string;
     user_id: string;
+    campaign_id?: string;
     role?: string;
     org_name?: string;
     user_name?: string;
@@ -65,7 +66,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 
 /**
  * Verify HS256 JWT signature and expiry, then extract Fixit identity from payload.
- * Payload must contain org_id, user_id, exp; optional role, org_name, user_name.
+ * Payload must contain org_id, user_id, exp; optional role, org_name, user_name, campaign_id.
  */
 export function verifyFixitJwt(token: string, secret: string): FixitIdentity {
   if (!secret || secret.length === 0) {
@@ -113,6 +114,7 @@ export function verifyFixitJwt(token: string, secret: string): FixitIdentity {
     role: parseRole(payload.role),
     orgName: typeof payload.org_name === "string" ? payload.org_name.trim() : undefined,
     userName: typeof payload.user_name === "string" ? payload.user_name.trim() : undefined,
+    campaignId: typeof payload.campaign_id === "string" ? payload.campaign_id.trim() : undefined,
   };
 }
 

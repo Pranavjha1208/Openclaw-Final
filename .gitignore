@@ -86,3 +86,8 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Local Fixit config and state (NEVER COMMIT — contains secrets)
+openclaw.json
+.openclaw-local/
+start-fixit.sh

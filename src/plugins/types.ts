@@ -54,8 +54,8 @@ export type OpenClawPluginConfigSchema = {
   jsonSchema?: Record<string, unknown>;
 };
 
-/** When set, plugin tools must restrict data access to this org and user (e.g. Fixit gateway). */
-export type FixitScope = { orgId: string; userId: string };
+/** When set, plugin tools must restrict data access to this org/user (and optionally campaign) e.g. Fixit gateway. */
+export type FixitScope = { orgId: string; userId: string; campaignId?: string };
 
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;

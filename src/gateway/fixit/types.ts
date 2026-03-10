@@ -5,12 +5,17 @@
 
 export type FixitUserRole = "super_user" | "user" | "admin";
 
+/** Matches fsc.enums.ChannelType values. */
+export type FixitChannelType = "whatsapp" | "ui";
+
 export type FixitIdentity = {
   orgId: string;
   userId: string;
   role: FixitUserRole;
   orgName?: string;
   userName?: string;
+  /** Optional per-dashboard campaign scoping; when set, queries are restricted to this campaign_id as well. */
+  campaignId?: string;
 };
 
 export type FixitChatSendBody = {
@@ -59,6 +64,7 @@ export type FixitSessionInfo = {
   startTime: string;
   endTime?: string | null;
   updatedAt: string;
+  channelType: FixitChannelType;
   metadata?: Record<string, unknown>;
 };
 
@@ -66,6 +72,7 @@ export type FixitChatMessage = {
   message: string;
   messageOwner: "user" | "assistant";
   messageType: string;
+  channelType: FixitChannelType;
   createdAt: string;
 };
 
@@ -76,6 +83,8 @@ export type FixitAuthVerifyResponse = {
   orgName?: string;
   userName?: string;
   role: FixitUserRole;
+  /** Optional campaign id echoed from JWT when present. */
+  campaignId?: string;
 };
 
 export type FixitChatAbortBody = {

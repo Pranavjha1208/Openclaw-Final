@@ -62,8 +62,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
-  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org and user. */
-  fixitScope?: { orgId: string; userId: string };
+  /** When set (e.g. Fixit gateway), plugin tools must restrict to this org/user (and optionally campaign). */
+  fixitScope?: { orgId: string; userId: string; campaignId?: string };
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
