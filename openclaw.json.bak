@@ -27,7 +27,7 @@
       "mongodb": {
         "enabled": true,
         "config": {
-          "uri": "mongodb+srv://fixitaiwhatsappagent:Automate%402025@fixit-whatsapp-agent.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000",
+          "uri": "",
           "database": "fixit_whatsapp_agent_dev",
           "collection": "d_lead"
         }
