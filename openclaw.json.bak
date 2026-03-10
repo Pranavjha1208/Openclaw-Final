@@ -5,7 +5,7 @@
     "fixit": {
       "enabled": true,
       "jwtSecret": "fixit-dev-jwt-secret-2026",
-      "mongoUri": "mongodb+srv://fixitaiwhatsappagent:Automate%402025@fixit-whatsapp-agent.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000",
+      "mongoUri": "",
       "mongoDatabase": "fixit_whatsapp_agent_dev",
       "allowDevJwt": true,
       "cors": {
@@ -36,7 +36,7 @@
   },
   "env": {
     "vars": {
-      "GEMINI_API_KEY": "AIzaSyBfFd3MmU06kIm2UfC1LIlvKAwPUS4knyQ"
+      "GEMINI_API_KEY": ""
     }
   }
 }
