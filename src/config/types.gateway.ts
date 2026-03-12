@@ -325,7 +325,11 @@ export type GatewayConfig = {
 export type GatewayFixitConfig = {
   /** Enable Fixit API endpoints under basePath. Default: false. */
   enabled?: boolean;
-  /** JWT secret for verifying Fixit tokens (or set FIXIT_JWT_SECRET). */
+  /** Auth mode: "jwt" = HS256 Bearer with org_id/user_id in payload; "firebase" = Firebase ID token, extract user_id from JWT and resolve org_id from d_user. */
+  authMode?: "jwt" | "firebase";
+  /** Firebase project ID (e.g. fixit-160dc). Required when authMode is "firebase". */
+  firebaseProjectId?: string;
+  /** JWT secret for HS256 tokens (dev/jwt and when authMode is "jwt"). Set FIXIT_JWT_SECRET or gateway.fixit.jwtSecret. */
   jwtSecret?: string;
   /** Base path for Fixit API (default: /api/fixit). */
   basePath?: string;

@@ -3,13 +3,18 @@
  * Reads from gateway.fixit and env (FIXIT_JWT_SECRET).
  */
 
-import type { GatewayConfig, GatewayFixitConfig } from "../../config/types.gateway.js";
+import type { GatewayConfig } from "../../config/types.gateway.js";
 
 const DEFAULT_BASE_PATH = "/api/fixit";
 const DEFAULT_AGENT_ID = "main";
 
 export type FixitConfigResolved = {
   enabled: boolean;
+  /** "jwt" = HS256 with org_id/user_id in payload; "firebase" = Firebase ID token, resolve org from d_user. */
+  authMode: "jwt" | "firebase";
+  /** Required when authMode is "firebase". */
+  firebaseProjectId: string;
+  /** Required for dev/jwt and when authMode is "jwt". */
   jwtSecret: string;
   basePath: string;
   defaultAgentId: string;
@@ -17,7 +22,6 @@ export type FixitConfigResolved = {
   corsAllowOrigins: string[];
   mongoUri: string;
   mongoDatabase: string;
-  /** If true, POST .../dev/jwt can issue test JWTs (testing only). */
   allowDevJwt: boolean;
 };
 
@@ -28,15 +32,27 @@ export function resolveFixitConfig(cfg: { gateway?: GatewayConfig }): FixitConfi
     return null;
   }
 
+  const authMode = fixit.authMode === "firebase" ? "firebase" : "jwt";
+  const firebaseProjectId = fixit.firebaseProjectId?.trim() ?? "";
+  if (authMode === "firebase" && !firebaseProjectId) {
+    console.warn(
+      "[fixit] config: disabled — authMode=firebase requires gateway.fixit.firebaseProjectId",
+    );
+    return null;
+  }
+
   const jwtSecret =
     fixit.jwtSecret?.trim() ||
     (typeof process.env.FIXIT_JWT_SECRET === "string" && process.env.FIXIT_JWT_SECRET.trim()) ||
     "";
-  if (!jwtSecret) {
+  if (authMode === "jwt" && !jwtSecret) {
     console.warn(
       "[fixit] config: disabled — no jwtSecret (set gateway.fixit.jwtSecret or FIXIT_JWT_SECRET)",
     );
     return null;
+  }
+  if (authMode === "firebase" && fixit.allowDevJwt && !jwtSecret) {
+    console.warn("[fixit] config: allowDevJwt=true requires jwtSecret for dev/jwt endpoint");
   }
 
   const mongoUri = fixit.mongoUri?.trim() || "";
@@ -69,7 +85,9 @@ export function resolveFixitConfig(cfg: { gateway?: GatewayConfig }): FixitConfi
 
   const resolved: FixitConfigResolved = {
     enabled: true,
-    jwtSecret,
+    authMode,
+    firebaseProjectId: authMode === "firebase" ? firebaseProjectId : "",
+    jwtSecret: jwtSecret || "",
     basePath: basePath.replace(/\/+$/, "") || "/",
     defaultAgentId: fixit.defaultAgentId?.trim() || DEFAULT_AGENT_ID,
     orgAgentMapping,

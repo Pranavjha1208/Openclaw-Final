@@ -75,7 +75,7 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
-function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
+function substituteString(value: string, env: NodeJS.ProcessEnv, _configPath: string): string {
   if (!value.includes("$")) {
     return value;
   }
@@ -97,10 +97,8 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
     }
     if (token?.kind === "substitution") {
       const envValue = env[token.name];
-      if (envValue === undefined || envValue === "") {
-        throw new MissingEnvVarError(token.name, configPath);
-      }
-      chunks.push(envValue);
+      // Substitute to empty string when var is missing so config still loads (e.g. fixit disables until .env.local is used).
+      chunks.push(envValue !== undefined && envValue !== "" ? envValue : "");
       i = token.end;
       continue;
     }

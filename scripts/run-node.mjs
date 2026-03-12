@@ -1,24 +1,12 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 const compiler = "tsdown";
 const compilerArgs = ["exec", compiler, "--no-clean"];
-
-/** Resolve tsdown/run entry so we can run it with node when bin symlink is broken (e.g. pnpm layout). If the resolved path does not exist (e.g. tsdown package layout changed), returns null and we fall back to pnpm exec tsdown. */
-function resolveTsdownRun(cwd) {
-  try {
-    const require = createRequire(pathToFileURL(path.join(cwd, "package.json")).href);
-    const resolved = require.resolve("tsdown/run");
-    return fs.existsSync(resolved) ? resolved : null;
-  } catch {
-    return null;
-  }
-}
 
 export const runNodeWatchedPaths = ["src", "tsconfig.json", "package.json"];
 
@@ -243,14 +231,10 @@ export async function runNodeMain(params = {}) {
   }
 
   logRunner("Building TypeScript (dist is stale).", deps);
-  let buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
-  let buildArgs =
+  const buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
+  const buildArgs =
     deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
-  const tsdownRun = resolveTsdownRun(deps.cwd);
-  if (deps.platform !== "win32" && tsdownRun) {
-    buildCmd = deps.execPath;
-    buildArgs = [tsdownRun, "--no-clean"];
-  }
+  // Use pnpm exec tsdown so we don't depend on tsdown's internal dist/run.mjs path (package layout can vary).
   const build = deps.spawn(buildCmd, buildArgs, {
     cwd: deps.cwd,
     env: deps.env,

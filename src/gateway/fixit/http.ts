@@ -15,8 +15,14 @@ import { runWithFixitScope } from "../../infra/fixit-request-scope.js";
 import { resolveAssistantStreamDeltaText } from "../agent-event-assistant-text.js";
 import { readJsonBody } from "../hooks.js";
 import { sendJson, setSseHeaders } from "../http-common.js";
+import { getBearerToken } from "../http-utils.js";
 import { buildFixitAgentContext } from "./agent-context.js";
-import { authenticateFixitRequest, signFixitJwt, verifyFixitJwt } from "./auth.js";
+import {
+  authenticateFixitRequest,
+  signFixitJwt,
+  verifyFixitJwt,
+  verifyFirebaseFixitJwt,
+} from "./auth.js";
 import type { FixitConfigResolved } from "./config.js";
 import { applyFixitCorsHeaders, handleFixitOptions } from "./cors.js";
 import {
@@ -24,9 +30,11 @@ import {
   recordFixitMessage,
   closeFixitMongoClient,
   loadFullAgentContext,
+  getOrgIdForUser,
   type GetOrCreateFixitSessionResult,
 } from "./mongo-sync.js";
 import { buildFixitSessionKeyForIdentity } from "./session.js";
+import type { FixitIdentity } from "./types.js";
 import type {
   FixitChannelType,
   FixitChatSendBody,
@@ -36,6 +44,60 @@ import type {
 } from "./types.js";
 
 const FIXIT_UI_CHANNEL: FixitChannelType = "ui";
+
+/**
+ * Resolve Fixit identity for the request. When authMode is "firebase", verifies Firebase JWT and
+ * resolves org_id from d_user; otherwise uses HS256 JWT with org_id/user_id in payload.
+ * Sends 401/403 and returns null on failure.
+ */
+async function resolveFixitIdentity(
+  req: IncomingMessage,
+  res: ServerResponse,
+  fixitConfig: FixitConfigResolved,
+): Promise<FixitIdentity | null> {
+  const token = getBearerToken(req);
+  if (!token) {
+    console.log("[fixit] auth: missing Authorization header");
+    sendJson(res, 401, { error: "Missing Authorization header" });
+    return null;
+  }
+
+  if (fixitConfig.authMode === "firebase") {
+    try {
+      const { userId: userIdFromJwt, phoneNumber } = await verifyFirebaseFixitJwt(
+        token,
+        fixitConfig.firebaseProjectId,
+      );
+      console.log(`[fixit] auth: JWT userId=${userIdFromJwt} phoneNumber=${phoneNumber ?? "—"}`);
+      const resolved = await getOrgIdForUser(
+        userIdFromJwt,
+        fixitConfig.mongoUri,
+        fixitConfig.mongoDatabase,
+        phoneNumber,
+      );
+      if (!resolved) {
+        console.log(
+          `[fixit] auth: user not in d_user (userIdFromJwt=${userIdFromJwt.slice(0, 12)}… phone=${phoneNumber ?? "—"})`,
+        );
+        sendJson(res, 403, { error: "User organization not found" });
+        return null;
+      }
+      console.log(`[fixit] auth: from d_user orgId=${resolved.orgId} userId=${resolved.userId}`);
+      const identity: FixitIdentity = {
+        orgId: resolved.orgId,
+        userId: resolved.userId,
+        role: "user",
+      };
+      return identity;
+    } catch (err) {
+      console.log("[fixit] auth: Firebase token invalid or expired:", String(err));
+      sendJson(res, 401, { error: "Invalid or expired token", details: String(err) });
+      return null;
+    }
+  }
+
+  return authenticateFixitRequest(req, res, fixitConfig.jwtSecret);
+}
 
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -129,7 +191,11 @@ export async function handleFixitHttpRequest(
       return true;
     }
     try {
-      verifyFixitJwt(queryToken, fixitConfig.jwtSecret);
+      if (fixitConfig.authMode === "firebase") {
+        await verifyFirebaseFixitJwt(queryToken, fixitConfig.firebaseProjectId);
+      } else {
+        verifyFixitJwt(queryToken, fixitConfig.jwtSecret);
+      }
     } catch {
       sendJson(res, 401, { error: "Invalid or expired token" });
       return true;
@@ -177,9 +243,9 @@ export async function handleFixitHttpRequest(
     return true;
   }
 
-  const identity = await authenticateFixitRequest(req, res, fixitConfig.jwtSecret);
+  const identity = await resolveFixitIdentity(req, res, fixitConfig);
   if (!identity) {
-    console.log("[fixit] auth failed — returned 401");
+    console.log("[fixit] auth failed — returned 401/403");
     return true;
   }
   console.log(`[fixit] auth OK: org=${identity.orgId} user=${identity.userId}`);
@@ -262,7 +328,7 @@ export async function handleFixitHttpRequest(
     }
 
     // Load all context in parallel: workspace + session history + cross-session
-    let agentCtxData;
+    let agentCtxData: Awaited<ReturnType<typeof loadFullAgentContext>> | undefined;
     try {
       agentCtxData = await loadFullAgentContext(
         identity,
@@ -276,7 +342,7 @@ export async function handleFixitHttpRequest(
 
     const runId = randomUUID();
     console.log(
-      `[fixit] chat/send: message="${message.slice(0, 60)}" session=${sessionUuid.slice(0, 8)} runId=${runId.slice(0, 8)} workspace=${agentCtxData?.workspace.status ?? "unknown"} history=${agentCtxData?.sessionHistory.length ?? 0}+${agentCtxData?.crossSessionHistory.length ?? 0}`,
+      `[fixit] chat/send: message="${message.slice(0, 60)}" session=${sessionUuid.slice(0, 8)} runId=${runId.slice(0, 8)} workspace=${agentCtxData?.workspace.initialized ? "loaded" : "new"} history=${agentCtxData?.sessionHistory.length ?? 0}+${agentCtxData?.crossSessionHistory.length ?? 0}`,
     );
     const abortController = new AbortController();
     runIdToAbort.set(runId, {

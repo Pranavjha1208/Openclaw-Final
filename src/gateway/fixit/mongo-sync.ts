@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ObjectId } from "mongodb";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId as MongoObjectId } from "mongodb";
 import type { FixitChannelType, FixitIdentity } from "./types.js";
 
 let cachedClient: MongoClient | null = null;
@@ -27,6 +27,100 @@ async function getClient(uri: string): Promise<MongoClient> {
 export async function getFixitDb(mongoUri: string, mongoDatabase: string) {
   const client = await getClient(mongoUri);
   return client.db(mongoDatabase);
+}
+
+/** User document from d_user; org may be string, embedded { org_id }, or ObjectId reference. */
+type DUserDoc = {
+  user_id?: string;
+  org_id?: string;
+  org?: { org_id?: string } | ObjectId;
+  phone_number?: string;
+  phone?: string;
+};
+
+/** d_org document: _id (ObjectId) and org_id (string). */
+type DOrgDoc = { _id?: ObjectId; org_id?: string };
+
+/**
+ * Resolve org_id for a user by querying d_user (Fixit schema: D_User with org).
+ * Tries user_id from JWT, then phone (with/without +), then phone_number field.
+ * When org is an ObjectId reference, looks up d_org by _id to get org_id string.
+ * Returns { orgId, userId } for use as FixitIdentity.
+ */
+export async function getOrgIdForUser(
+  userIdFromJwt: string,
+  mongoUri: string,
+  mongoDatabase: string,
+  phoneNumber?: string,
+): Promise<{ orgId: string; userId: string } | null> {
+  const client = await getClient(mongoUri);
+  const db = client.db(mongoDatabase);
+  const coll = db.collection<DUserDoc>("d_user");
+
+  const orConditions: Record<string, unknown>[] = [{ user_id: userIdFromJwt }];
+  if (phoneNumber) {
+    const normalized = phoneNumber.replace(/^\++/, "").trim();
+    if (normalized && normalized !== userIdFromJwt) {
+      orConditions.push({ user_id: normalized });
+      orConditions.push({ user_id: `+${normalized}` });
+      orConditions.push({ phone_number: phoneNumber });
+      orConditions.push({ phone_number: normalized });
+      orConditions.push({ phone: phoneNumber });
+      orConditions.push({ phone: normalized });
+    }
+  }
+
+  console.log(
+    `[fixit] getOrgIdForUser: querying d_user with userIdFromJwt=${userIdFromJwt} phoneNumber=${phoneNumber ?? "—"}`,
+  );
+  const doc = await coll.findOne({ $or: orConditions });
+  if (!doc) {
+    console.log("[fixit] getOrgIdForUser: no d_user document found");
+    return null;
+  }
+
+  let orgId =
+    (typeof doc.org_id === "string" && doc.org_id.trim()) ||
+    (doc.org &&
+      typeof doc.org === "object" &&
+      !(doc.org instanceof MongoObjectId) &&
+      "org_id" in doc.org &&
+      typeof (doc.org as { org_id?: string }).org_id === "string" &&
+      (doc.org as { org_id: string }).org_id.trim()) ||
+    "";
+
+  if (!orgId && doc.org) {
+    let orgRef: MongoObjectId | null = null;
+    if (doc.org instanceof MongoObjectId) {
+      orgRef = doc.org;
+    } else if (
+      doc.org &&
+      typeof doc.org === "object" &&
+      "$oid" in doc.org &&
+      typeof (doc.org as { $oid: string }).$oid === "string"
+    ) {
+      orgRef = new MongoObjectId((doc.org as { $oid: string }).$oid);
+    }
+    if (orgRef) {
+      const orgDoc = await db.collection<DOrgDoc>("d_org").findOne({ _id: orgRef });
+      if (orgDoc && typeof orgDoc.org_id === "string" && orgDoc.org_id.trim()) {
+        orgId = orgDoc.org_id.trim();
+        console.log(`[fixit] getOrgIdForUser: resolved org ref to orgId=${orgId}`);
+      }
+    }
+  }
+
+  const userId = (typeof doc.user_id === "string" && doc.user_id.trim()) || userIdFromJwt;
+  console.log(
+    `[fixit] getOrgIdForUser: found d_user orgId=${orgId} userId=${userId} (doc.user_id=${typeof doc.user_id === "string" ? doc.user_id : "—"})`,
+  );
+  if (!orgId) {
+    console.log(
+      "[fixit] getOrgIdForUser: doc has no org_id / org.org_id and d_org lookup failed or missing",
+    );
+    return null;
+  }
+  return { orgId, userId };
 }
 
 export async function closeFixitMongoClient(): Promise<void> {
@@ -110,21 +204,21 @@ export type WorkspaceDoc = {
   content_md: string;
 };
 
-export const CORE_DOC_TYPES = ["identity", "soul", "agents"] as const;
+/** The single workspace doc type that stores all user profile info. */
+export const WORKSPACE_PROFILE_DOC_ID = "profile";
 
 export type WorkspaceCheckResult = {
-  /** "full" = all 3 core docs exist; "partial" = some exist; "empty" = none */
-  status: "full" | "partial" | "empty";
-  /** existing workspace docs for this org/user (may be empty) */
-  docs: WorkspaceDoc[];
-  /** which core doc_types are missing (empty when status=full) */
-  missingTypes: string[];
+  /** true when a profile doc exists with content */
+  initialized: boolean;
+  /** the profile doc if it exists (null otherwise) */
+  profile: WorkspaceDoc | null;
+  /** any additional workspace docs (reports, playbooks, etc.) */
+  extras: WorkspaceDoc[];
 };
 
 /**
- * Check whether f_user_workspace has core docs for this org/user/campaign.
- * Returns granular status: full / partial / empty — so the agent can complete
- * only what's missing instead of re-onboarding from scratch.
+ * Check whether f_user_workspace has a profile doc for this org/user/campaign.
+ * Returns initialized=true when the single "profile" doc exists with content.
  */
 export async function checkOrInitWorkspace(
   identity: FixitIdentity,
@@ -143,7 +237,6 @@ export async function checkOrInitWorkspace(
     scopeFilter.campaign_id = identity.campaignId;
   }
 
-  // Load ALL workspace docs (core + any custom ones like playbooks/reports)
   const cursor = db.collection("f_user_workspace").find(scopeFilter, {
     projection: { doc_id: 1, doc_type: 1, title: 1, content_md: 1, _id: 0 },
   });
@@ -158,17 +251,15 @@ export async function checkOrInitWorkspace(
     }))
     .filter((d) => d.content_md.trim().length > 0);
 
-  const foundTypes = new Set(docs.map((d) => d.doc_type));
-  const missingTypes = CORE_DOC_TYPES.filter((t) => !foundTypes.has(t));
-
-  const status: WorkspaceCheckResult["status"] =
-    missingTypes.length === 0 ? "full" : docs.length === 0 ? "empty" : "partial";
+  const profile = docs.find((d) => d.doc_id === WORKSPACE_PROFILE_DOC_ID) ?? null;
+  const extras = docs.filter((d) => d.doc_id !== WORKSPACE_PROFILE_DOC_ID);
+  const initialized = profile !== null;
 
   console.log(
-    `[fixit] workspace: org=${identity.orgId} user=${identity.userId} status=${status} found=${docs.length} missing=[${missingTypes.join(",")}]`,
+    `[fixit] workspace: org=${identity.orgId} user=${identity.userId} initialized=${initialized} extras=${extras.length}`,
   );
 
-  return { status, docs, missingTypes };
+  return { initialized, profile, extras };
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +380,7 @@ export async function loadFullAgentContext(
   ]);
 
   console.log(
-    `[fixit] context loaded: workspace=${workspace.status} sessionMsgs=${sessionHistory.length} crossSessionMsgs=${crossSessionHistory.length}`,
+    `[fixit] context loaded: workspace=${workspace.initialized ? "loaded" : "new"} sessionMsgs=${sessionHistory.length} crossSessionMsgs=${crossSessionHistory.length}`,
   );
 
   return { workspace, sessionHistory, crossSessionHistory };

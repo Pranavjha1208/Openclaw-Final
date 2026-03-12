@@ -1,9 +1,10 @@
 /**
  * Fixit Chatbot Integration — JWT verification, signing, and identity extraction.
- * Validates Fixit JWTs (HS256) and returns FixitIdentity from the payload.
+ * Supports: (1) HS256 tokens with org_id/user_id in payload; (2) Firebase ID tokens — extract user_id, resolve org_id from d_user.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -36,10 +37,10 @@ import { sendJson } from "../http-common.js";
 import { getBearerToken } from "../http-utils.js";
 import type { FixitIdentity, FixitUserRole } from "./types.js";
 
-const ROLE_VALUES: FixitUserRole[] = new Set(["super_user", "user", "admin"]);
+const ROLE_VALUES: readonly FixitUserRole[] = ["super_user", "user", "admin"];
 
 function parseRole(value: unknown): FixitUserRole {
-  if (typeof value === "string" && ROLE_VALUES.has(value as FixitUserRole)) {
+  if (typeof value === "string" && (ROLE_VALUES as readonly string[]).includes(value)) {
     return value as FixitUserRole;
   }
   return "user";
@@ -119,7 +120,40 @@ export function verifyFixitJwt(token: string, secret: string): FixitIdentity {
 }
 
 /**
- * Authenticate a request using Authorization: Bearer <token>.
+ * Verify Firebase ID token (RS256) and return user identifier claims.
+ * Issuer: https://securetoken.google.com/<projectId>, audience: projectId.
+ * Returns user_id (or sub) and phone_number from payload for DB lookup.
+ */
+export async function verifyFirebaseFixitJwt(
+  token: string,
+  firebaseProjectId: string,
+): Promise<{ userId: string; phoneNumber?: string }> {
+  if (!firebaseProjectId || !firebaseProjectId.trim()) {
+    throw new Error("Firebase project ID is not configured");
+  }
+  const JWKS = createRemoteJWKSet(
+    new URL(
+      "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com",
+    ),
+  );
+  const { payload } = await jwtVerify(token, JWKS, {
+    issuer: `https://securetoken.google.com/${firebaseProjectId}`,
+    audience: firebaseProjectId,
+  });
+  const userId =
+    (typeof payload.user_id === "string" && payload.user_id.trim()) ||
+    (typeof payload.sub === "string" && payload.sub.trim()) ||
+    "";
+  if (!userId) {
+    throw new Error("Firebase JWT missing user_id or sub");
+  }
+  const phoneNumber =
+    typeof payload.phone_number === "string" ? payload.phone_number.trim() : undefined;
+  return { userId, phoneNumber };
+}
+
+/**
+ * Authenticate a request using Authorization: Bearer <token> (HS256 with org_id/user_id in payload).
  * Returns FixitIdentity or null and sends 401 if invalid.
  */
 export async function authenticateFixitRequest(

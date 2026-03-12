@@ -4,13 +4,13 @@
  *
  * Injects:
  * 1. Identity + strict scoping rules
- * 2. Workspace docs (identity/soul/agents) or onboarding instructions
+ * 2. Workspace profile (single doc) or onboarding instructions
  * 3. Conversation memory (current session + cross-session)
  * 4. Export / formatting rules
  */
 
 import type { WorkspaceCheckResult, HistoryMessage } from "./mongo-sync.js";
-import { CORE_DOC_TYPES } from "./mongo-sync.js";
+import { WORKSPACE_PROFILE_DOC_ID } from "./mongo-sync.js";
 import type { FixitIdentity } from "./types.js";
 
 export type AgentContextInput = {
@@ -36,7 +36,6 @@ export function buildFixitAgentContext(input: AgentContextInput): string {
 
   let prompt = sections.filter(Boolean).join("\n\n");
 
-  // Token budget safety: if the entire prompt exceeds budget, truncate memory
   if (prompt.length > MAX_CONTEXT_CHARS) {
     const trimmedSections = [
       buildIdentitySection(identity),
@@ -79,96 +78,51 @@ function buildScopingRules(identity: FixitIdentity): string {
 
 function buildWorkspaceSection(identity: FixitIdentity, workspace?: WorkspaceCheckResult): string {
   const header = `WORKSPACE (MongoDB collection "f_user_workspace", scoped by org_id/user_id${identity.campaignId ? "/campaign_id" : ""}):
-- Schema: org_id, user_id, campaign_id (nullable), doc_id, doc_type, title, content_md, content_json, tags, metadata, created_at, updated_at, deleted_at.
-- Core docs: IDENTITY (doc_type="identity"), SOUL (doc_type="soul"), AGENTS (doc_type="agents").`;
+- All user preferences are stored in a SINGLE document with doc_id="${WORKSPACE_PROFILE_DOC_ID}" and doc_type="profile".
+- Schema: org_id, user_id, campaign_id (nullable), doc_id, doc_type, title, content_md, created_at, updated_at, deleted_at.`;
 
-  if (!workspace || workspace.status === "empty") {
-    return `${header}\n\n${buildFullOnboardingPrompt(identity)}`;
+  if (!workspace || !workspace.initialized) {
+    return `${header}\n\n${buildOnboardingPrompt(identity)}`;
   }
 
-  if (workspace.status === "partial") {
-    return `${header}\n\n${buildPartialOnboardingPrompt(identity, workspace)}`;
-  }
-
-  // status === "full"
   return `${header}\n\n${buildLoadedWorkspacePrompt(workspace)}`;
 }
 
-function buildFullOnboardingPrompt(identity: FixitIdentity): string {
+function buildOnboardingPrompt(identity: FixitIdentity): string {
   const scopeFields = buildScopeFields(identity);
-  return `*** NEW USER — NO WORKSPACE YET ***
-No identity/soul/agents docs exist for this org/user. You MUST run onboarding NOW.
+  return `*** NEW USER — NO PROFILE EXISTS YET ***
+No profile document exists for this org/user. You MUST run onboarding NOW.
 
 ONBOARDING FLOW:
-1. Greet the user warmly. Explain you need to learn about them to personalize the experience.
-2. Ask these questions (you may ask them together or one by one):
-   a) "What is your company/organization name and what do you do?" → for IDENTITY
-   b) "How should I communicate with you — formal, casual, concise, detailed?" → for SOUL (tone/style)
-   c) "What are your main goals with this dashboard? What kind of questions will you ask most?" → for AGENTS (capabilities/focus)
-3. After the user answers, synthesize markdown for each and save using mongo_insert:
-   ${buildInsertExample("identity", "Identity", scopeFields)}
-   ${buildInsertExample("soul", "Soul", scopeFields)}
-   ${buildInsertExample("agents", "Agents", scopeFields)}
-4. Confirm: "Your workspace is ready! I now know your identity, communication style, and goals."
+1. Greet the user. Ask ALL of these in a single message:
+   - "What is your name and company/organization?"
+   - "How should I communicate — formal or casual?"
+   - "What are your main goals with this dashboard?"
+2. Once the user replies (they may answer in one message or across a few), create ONE document combining everything:
+   {"collection":"f_user_workspace","document":{${scopeFields},"doc_id":"${WORKSPACE_PROFILE_DOC_ID}","doc_type":"profile","title":"User Profile","content_md":"# User Profile\\n\\n**Name:** <name>\\n**Company:** <company>\\n**Industry:** <if mentioned>\\n**Communication Style:** <formal/casual/etc>\\n**Goals:** <goals>\\n**Focus Areas:** <what they want to do>","created_at":{"$date":"now"},"updated_at":{"$date":"now"},"deleted_at":null}}
+3. Confirm briefly: "Profile saved! How can I help you?"
 
-IMPORTANT: Do NOT answer data queries or skip onboarding. Complete setup first.`;
-}
-
-function buildPartialOnboardingPrompt(identity: FixitIdentity, ws: WorkspaceCheckResult): string {
-  const scopeFields = buildScopeFields(identity);
-
-  // Show existing docs as context
-  const existingLines = ws.docs
-    .filter((d) => CORE_DOC_TYPES.includes(d.doc_type as (typeof CORE_DOC_TYPES)[number]))
-    .map((d) => `### ${d.doc_type.toUpperCase()}\n${d.content_md}`)
-    .join("\n\n");
-
-  const missingList = ws.missingTypes
-    .map((t) => {
-      const questions: Record<string, string> = {
-        identity: "What is your company/organization name and what do you do?",
-        soul: "How should I communicate with you — formal, casual, concise, detailed?",
-        agents: "What are your main goals with this dashboard?",
-      };
-      return `- **${t.toUpperCase()}**: Ask: "${questions[t] ?? `Tell me about your ${t}`}" → then mongo_insert: ${buildInsertExample(t, t.charAt(0).toUpperCase() + t.slice(1), scopeFields)}`;
-    })
-    .join("\n");
-
-  return `*** PARTIAL WORKSPACE — ${ws.missingTypes.length} doc(s) missing ***
-Existing docs loaded:
-${existingLines || "(none with content)"}
-
-Missing: ${ws.missingTypes.map((t) => t.toUpperCase()).join(", ")}
-
-Ask the user ONLY for the missing information:
-${missingList}
-
-After saving, confirm completion. You may answer data queries about existing context while collecting missing info.`;
+RULES:
+- Ask all questions in ONE message, not one by one.
+- Create exactly ONE document (doc_id="${WORKSPACE_PROFILE_DOC_ID}"), not multiple.
+- If the user wants to skip a question, that's fine — save what you have.
+- Do NOT answer data queries until the profile is saved.`;
 }
 
 function buildLoadedWorkspacePrompt(ws: WorkspaceCheckResult): string {
-  const coreDocs = ws.docs.filter((d) =>
-    CORE_DOC_TYPES.includes(d.doc_type as (typeof CORE_DOC_TYPES)[number]),
-  );
-  const customDocs = ws.docs.filter(
-    (d) => !CORE_DOC_TYPES.includes(d.doc_type as (typeof CORE_DOC_TYPES)[number]),
-  );
+  const profileContent = ws.profile?.content_md ?? "";
 
-  const coreLines = coreDocs
-    .map((d) => `### ${d.doc_type.toUpperCase()}\n${d.content_md}`)
-    .join("\n\n");
-
-  const customLines =
-    customDocs.length > 0
-      ? `\n\nAdditional workspace docs:\n${customDocs.map((d) => `- **${d.title || d.doc_type}** (${d.doc_id}): ${d.content_md.slice(0, 200)}${d.content_md.length > 200 ? "…" : ""}`).join("\n")}`
+  const extraLines =
+    ws.extras.length > 0
+      ? `\n\nAdditional workspace docs:\n${ws.extras.map((d) => `- **${d.title || d.doc_type}** (${d.doc_id}): ${d.content_md.slice(0, 200)}${d.content_md.length > 200 ? "…" : ""}`).join("\n")}`
       : "";
 
-  return `WORKSPACE LOADED — returning user.
+  return `PROFILE LOADED — returning user.
 
-${coreLines}${customLines}
+${profileContent}${extraLines}
 
-Use these docs as your operating context and persona. Respect the tone/style from SOUL.
-If the user updates policies, goals, or preferences, update the relevant doc via mongo_update on f_user_workspace (match by doc_id + org_id + user_id).`;
+Use this profile as your operating context. Respect the communication style.
+If the user updates preferences, update the profile via mongo_update on f_user_workspace (filter by doc_id="${WORKSPACE_PROFILE_DOC_ID}" + org_id + user_id).`;
 }
 
 function buildConversationMemory(
@@ -219,8 +173,4 @@ function buildScopeFields(identity: FixitIdentity): string {
   const parts = [`"org_id":"${identity.orgId}","user_id":"${identity.userId}"`];
   parts.push(identity.campaignId ? `"campaign_id":"${identity.campaignId}"` : `"campaign_id":null`);
   return parts.join(",");
-}
-
-function buildInsertExample(docType: string, title: string, scopeFields: string): string {
-  return `{"collection":"f_user_workspace","document":{${scopeFields},"doc_id":"${docType}","doc_type":"${docType}","title":"${title}","content_md":"<synthesized markdown>","created_at":{"$date":"now"},"updated_at":{"$date":"now"},"deleted_at":null}}`;
 }

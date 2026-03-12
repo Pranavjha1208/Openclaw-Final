@@ -559,6 +559,8 @@ export const OpenClawSchema = z
         fixit: z
           .object({
             enabled: z.boolean().optional(),
+            authMode: z.enum(["jwt", "firebase"]).optional(),
+            firebaseProjectId: z.string().optional(),
             jwtSecret: z.string().optional().register(sensitive),
             basePath: z.string().optional(),
             defaultAgentId: z.string().optional(),

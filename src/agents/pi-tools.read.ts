@@ -381,6 +381,7 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
                 text: `File not found: ${filePath}`,
               },
             ],
+            details: {},
           };
         }
         throw err;

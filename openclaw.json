@@ -1,0 +1,50 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "google/gemini-2.5-flash"
+      },
+      "workspace": "./.openclaw-local/workspace",
+      "skipBootstrap": true,
+      "compaction": {
+        "mode": "safeguard"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_AUTH_TOKEN}"
+    },
+    "fixit": {
+      "enabled": true,
+      "authMode": "firebase",
+      "firebaseProjectId": "fixit-160dc",
+      "jwtSecret": "${FIXIT_JWT_SECRET}",
+      "cors": {
+        "allowOrigins": ["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"]
+      },
+      "mongoUri": "${FIXIT_MONGO_URI}",
+      "mongoDatabase": "fixit_whatsapp_agent_dev",
+      "allowDevJwt": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "mongodb": {
+        "enabled": true,
+        "config": {
+          "uri": "${FIXIT_MONGO_URI}",
+          "database": "fixit_whatsapp_agent_dev",
+          "collection": "d_lead"
+        }
+      }
+    }
+  }
+}

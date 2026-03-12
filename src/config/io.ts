@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
-import { loadDotEnv } from "../infra/dotenv.js";
+import { loadDotEnv, loadEnvLocalFromConfigDir } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -543,6 +543,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
+      // Load .env.local next to the config so ${VAR} (e.g. FIXIT_MONGO_URI) are set when process is started without run-openclaw.sh.
+      if (deps.env === process.env) {
+        loadEnvLocalFromConfigDir(path.dirname(configPath), { quiet: true });
+      }
       const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,

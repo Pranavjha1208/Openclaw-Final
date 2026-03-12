@@ -18,3 +18,16 @@ export function loadDotEnv(opts?: { quiet?: boolean }) {
 
   dotenv.config({ quiet, path: globalEnvPath, override: false });
 }
+
+/**
+ * Load .env.local from the given directory (e.g. config file dir) into process.env.
+ * Used so openclaw.json with ${VAR} can rely on .env.local next to the config.
+ */
+export function loadEnvLocalFromConfigDir(configDir: string, opts?: { quiet?: boolean }): void {
+  const quiet = opts?.quiet ?? true;
+  const envLocalPath = path.join(configDir, ".env.local");
+  if (!fs.existsSync(envLocalPath)) {
+    return;
+  }
+  dotenv.config({ quiet, path: envLocalPath, override: false });
+}

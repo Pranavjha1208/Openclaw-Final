@@ -87,7 +87,8 @@ USER.md
 /local/
 package-lock.json
 
-# Local Fixit config and state (NEVER COMMIT — contains secrets)
-openclaw.json
+# Local Fixit state (NEVER COMMIT — runtime data)
 .openclaw-local/
-start-fixit.sh
+
+# Local secrets — use .env.local (see .env.local.example). Never commit.
+.env.local
