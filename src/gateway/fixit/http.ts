@@ -4,9 +4,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream, readdirSync, statSync, unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, extname } from "node:path";
+import { basename, extname, join, resolve, sep } from "node:path";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -30,6 +30,7 @@ import {
   recordFixitMessage,
   closeFixitMongoClient,
   loadFullAgentContext,
+  checkOrInitWorkspace,
   getOrgIdForUser,
   type GetOrCreateFixitSessionResult,
 } from "./mongo-sync.js";
@@ -206,11 +207,40 @@ export async function handleFixitHttpRequest(
       return true;
     }
     const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    const workspaceRoot = `${homeDir}/.openclaw/workspace`;
-    const resolved = filePath.startsWith("~") ? filePath.replace(/^~/, homeDir) : filePath;
-    if (!resolved.startsWith(workspaceRoot)) {
-      sendJson(res, 403, { error: "File must be under ~/.openclaw/workspace" });
+    const stateDir =
+      process.env.OPENCLAW_STATE_DIR ??
+      join(process.cwd(), ".openclaw-local") ??
+      join(homeDir, ".openclaw");
+    const workspaceRoot = resolve(join(stateDir, "workspace"));
+    const fixitExportsRoot = resolve(join(stateDir, "fixit-exports"));
+    const resolved = resolve(filePath.startsWith("~") ? filePath.replace(/^~/, homeDir) : filePath);
+    const underWorkspace = resolved === workspaceRoot || resolved.startsWith(workspaceRoot + sep);
+    const underExports =
+      resolved === fixitExportsRoot || resolved.startsWith(fixitExportsRoot + sep);
+    if (!underWorkspace && !underExports) {
+      sendJson(res, 403, {
+        error: "File must be under workspace or fixit-exports",
+      });
       return true;
+    }
+    // Remove fixit-exports files older than 2 days (temp CSV downloads).
+    try {
+      if (readdirSync(fixitExportsRoot, { withFileTypes: true }).length > 0) {
+        const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        for (const ent of readdirSync(fixitExportsRoot, { withFileTypes: true })) {
+          if (!ent.isFile()) {
+            continue;
+          }
+          const p = join(fixitExportsRoot, ent.name);
+          const st = statSync(p);
+          if (now - st.mtimeMs > twoDaysMs) {
+            unlinkSync(p);
+          }
+        }
+      }
+    } catch {
+      // Ignore cleanup errors (e.g. dir missing).
     }
     try {
       const stat = statSync(resolved);
@@ -327,7 +357,8 @@ export async function handleFixitHttpRequest(
       return true;
     }
 
-    // Load all context in parallel: workspace + session history + cross-session
+    // Load all context in parallel: workspace + session history + cross-session.
+    // If full load fails (e.g. session history query), still load workspace so we never drop the profile.
     let agentCtxData: Awaited<ReturnType<typeof loadFullAgentContext>> | undefined;
     try {
       agentCtxData = await loadFullAgentContext(
@@ -337,7 +368,21 @@ export async function handleFixitHttpRequest(
         fixitConfig.mongoDatabase,
       );
     } catch (err) {
-      console.warn("[fixit] context loading failed, proceeding with defaults:", err);
+      console.warn("[fixit] context loading failed, loading workspace only:", err);
+      try {
+        const workspace = await checkOrInitWorkspace(
+          identity,
+          fixitConfig.mongoUri,
+          fixitConfig.mongoDatabase,
+        );
+        agentCtxData = {
+          workspace,
+          sessionHistory: [],
+          crossSessionHistory: [],
+        };
+      } catch (workspaceErr) {
+        console.warn("[fixit] workspace fallback failed:", workspaceErr);
+      }
     }
 
     const runId = randomUUID();

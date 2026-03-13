@@ -219,6 +219,8 @@ export type WorkspaceCheckResult = {
 /**
  * Check whether f_user_workspace has a profile doc for this org/user/campaign.
  * Returns initialized=true when the single "profile" doc exists with content.
+ * Matches deleted_at null or missing. When identity has campaignId, tries campaign-scoped
+ * first then falls back to campaign_id: null so the global profile is found after refresh.
  */
 export async function checkOrInitWorkspace(
   identity: FixitIdentity,
@@ -227,20 +229,31 @@ export async function checkOrInitWorkspace(
 ): Promise<WorkspaceCheckResult> {
   const client = await getClient(mongoUri);
   const db = client.db(mongoDatabase);
+  const coll = db.collection("f_user_workspace");
+  const projection = { doc_id: 1, doc_type: 1, title: 1, content_md: 1, _id: 0 };
 
-  const scopeFilter: Record<string, unknown> = {
+  // Match deleted_at null or missing (some writers may omit the field).
+  const deletedOk = { $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }] };
+
+  const baseFilter: Record<string, unknown> = {
     org_id: identity.orgId,
     user_id: identity.userId,
-    deleted_at: null,
+    ...deletedOk,
   };
-  if (identity.campaignId) {
-    scopeFilter.campaign_id = identity.campaignId;
-  }
 
-  const cursor = db.collection("f_user_workspace").find(scopeFilter, {
-    projection: { doc_id: 1, doc_type: 1, title: 1, content_md: 1, _id: 0 },
-  });
-  const rows = await cursor.toArray();
+  let rows: Array<Record<string, unknown>>;
+  if (identity.campaignId) {
+    const scopedFilter = { ...baseFilter, campaign_id: identity.campaignId };
+    rows = await coll.find(scopedFilter, { projection }).toArray();
+    // If no profile found (e.g. profile was saved with campaign_id: null), use global profile.
+    if (rows.length === 0 || !rows.some((r) => (r.doc_id as string) === WORKSPACE_PROFILE_DOC_ID)) {
+      const globalFilter = { ...baseFilter, campaign_id: null };
+      const globalRows = await coll.find(globalFilter, { projection }).toArray();
+      rows = globalRows.length > 0 ? globalRows : rows;
+    }
+  } else {
+    rows = await coll.find(baseFilter, { projection }).toArray();
+  }
 
   const docs: WorkspaceDoc[] = rows
     .map((r) => ({
@@ -307,16 +320,19 @@ export async function loadSessionHistory(
   const rows = await cursor.toArray();
 
   // Reverse so oldest first (chronological order for the agent)
-  return rows.toReversed().map((r) => ({
-    role: r.message_owner === "assistant" ? ("assistant" as const) : ("user" as const),
-    text: truncateMsg((r.message as string) ?? ""),
-    createdAt:
-      r.created_at instanceof Date
-        ? r.created_at.toISOString()
-        : typeof r.created_at === "string"
-          ? r.created_at
-          : new Date().toISOString(),
-  }));
+  return rows
+    .slice()
+    .toReversed()
+    .map((r) => ({
+      role: r.message_owner === "assistant" ? ("assistant" as const) : ("user" as const),
+      text: truncateMsg((r.message as string) ?? ""),
+      createdAt:
+        r.created_at instanceof Date
+          ? r.created_at.toISOString()
+          : typeof r.created_at === "string"
+            ? r.created_at
+            : new Date().toISOString(),
+    }));
 }
 
 /**
@@ -347,16 +363,19 @@ export async function loadCrossSessionContext(
     .limit(MAX_CROSS_SESSION_MESSAGES);
   const rows = await cursor.toArray();
 
-  return rows.toReversed().map((r) => ({
-    role: r.message_owner === "assistant" ? ("assistant" as const) : ("user" as const),
-    text: truncateMsg((r.message as string) ?? ""),
-    createdAt:
-      r.created_at instanceof Date
-        ? r.created_at.toISOString()
-        : typeof r.created_at === "string"
-          ? r.created_at
-          : new Date().toISOString(),
-  }));
+  return rows
+    .slice()
+    .toReversed()
+    .map((r) => ({
+      role: r.message_owner === "assistant" ? ("assistant" as const) : ("user" as const),
+      text: truncateMsg((r.message as string) ?? ""),
+      createdAt:
+        r.created_at instanceof Date
+          ? r.created_at.toISOString()
+          : typeof r.created_at === "string"
+            ? r.created_at
+            : new Date().toISOString(),
+    }));
 }
 
 /**

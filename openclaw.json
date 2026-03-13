@@ -28,7 +28,12 @@
       "firebaseProjectId": "fixit-160dc",
       "jwtSecret": "${FIXIT_JWT_SECRET}",
       "cors": {
-        "allowOrigins": ["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"]
+        "allowOrigins": [
+          "https://630d-14-143-254-194.ngrok-free.app",
+          "http://localhost:3000",
+          "http://localhost:5173",
+          "http://localhost:5174"
+        ]
       },
       "mongoUri": "${FIXIT_MONGO_URI}",
       "mongoDatabase": "fixit_whatsapp_agent_dev",

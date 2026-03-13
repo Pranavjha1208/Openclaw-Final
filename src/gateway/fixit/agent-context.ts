@@ -117,12 +117,15 @@ function buildLoadedWorkspacePrompt(ws: WorkspaceCheckResult): string {
       ? `\n\nAdditional workspace docs:\n${ws.extras.map((d) => `- **${d.title || d.doc_type}** (${d.doc_id}): ${d.content_md.slice(0, 200)}${d.content_md.length > 200 ? "…" : ""}`).join("\n")}`
       : "";
 
-  return `PROFILE LOADED — returning user.
+  return `PROFILE LOADED — returning user. DO NOT run onboarding again.
 
 ${profileContent}${extraLines}
 
-Use this profile as your operating context. Respect the communication style.
-If the user updates preferences, update the profile via mongo_update on f_user_workspace (filter by doc_id="${WORKSPACE_PROFILE_DOC_ID}" + org_id + user_id).`;
+MANDATORY RULES:
+- The user has already completed onboarding. NEVER ask for name, company, communication style, or goals again.
+- For "what's my name?" or similar: answer from the profile above (e.g. Name, Company, Communication Style, Goals). Do not say profile is not set up.
+- Use this profile as your operating context. Respect the communication style.
+- If the user updates preferences, update the profile via mongo_update on f_user_workspace (filter by doc_id="${WORKSPACE_PROFILE_DOC_ID}" + org_id + user_id).`;
 }
 
 function buildConversationMemory(
@@ -154,8 +157,9 @@ function buildConversationMemory(
 
 function buildExportRules(): string {
   return `EXCEL/CSV EXPORT RULES:
-- When the user requests lead data and the result would contain MORE THAN 10 rows, you MUST use mongo_export_csv to generate a CSV file instead of listing them in chat.
-- After exporting, provide the download link: [Download <filename>](/api/fixit/files/download?path=<filePath>)
+- When the user requests lead data and the result would contain MORE THAN 10 rows, you MUST use mongo_export_csv to generate a file instead of listing them in chat.
+- For production-quality leads export (Campaign Name, Lead Status, Comments, enrichment columns): use mongo_export_csv with collection d_lead, exportStyle "leads_production", and filename ending in .xlsx when the user asks for Excel (e.g. all_leads_<org_id>.xlsx). For CSV use the same exportStyle and .csv filename.
+- After exporting, provide the download link returned by the tool (file:// URL so the user can open the file directly).
 - For 10 or fewer rows, show data inline as a markdown table.`;
 }
 

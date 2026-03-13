@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { MongoClient, ObjectId, type Sort } from "mongodb";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
 import { transliterate } from "transliteration";
+import * as XLSX from "xlsx";
 
 /** Allow Latin letters, digits, space, and common punctuation for names/email. Strip everything else so only English is stored. */
 const LATIN_SAFE_RE = /[^\x20-\x7E\u00A0-\u024F]/g;
@@ -832,7 +834,7 @@ RESPONSE: Present aggregation results in a clear, summarized format. Do NOT dump
   const exportCsvTool: AnyAgentTool = {
     name: "mongo_export_csv",
     label: "MongoDB Export CSV",
-    description: `Export matching documents from a collection to a CSV file. Collections: ${COLLECTION_LIST}. Use this when the user asks for an Excel/CSV/spreadsheet export of leads. Returns the file path. For "100 random leads" use sampleSize: 100 (uses MongoDB $sample). Without sampleSize, exports ALL matching documents (no row limit). After exporting, if the user wants the file in chat: call the message tool with action sendAttachment and media set to the returned filePath so the file is delivered in Telegram/WhatsApp. Optionally provide a filter and/or sampleSize for random sampling.
+    description: `Export matching documents from a collection to CSV or Excel. Collections: ${COLLECTION_LIST}. Use when the user asks for an Excel/CSV/spreadsheet of leads. For production-quality leads (Campaign Name, Lead Status, Comments, enrichment): use collection d_lead, exportStyle "leads_production", and filename ending in .xlsx (Excel) or .csv. Returns file path and download link. For "100 random leads" use sampleSize: 100. Without sampleSize, exports ALL matching documents. After exporting, include the returned downloadLink in your reply. For Telegram/WhatsApp use the message tool with action sendAttachment and media set to filePath.
 
 ${CONTEXT_AND_ADVANCED_FILTERS}`,
     parameters: {
@@ -868,6 +870,11 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
           description:
             "If set, export a random sample of N documents (MongoDB $sample). Use for e.g. '100 random leads'. Omit to export all matching documents.",
         },
+        exportStyle: {
+          type: "string",
+          description:
+            "Set to 'leads_production' when collection is d_lead and the user asked for a production-quality leads export (includes Campaign Name, Lead Status, Comments, lead_data columns). Use with filename ending in .xlsx for Excel output.",
+        },
       },
     },
     async execute(_toolCallId: string, params: Record<string, unknown>) {
@@ -884,135 +891,345 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         typeof params.sampleSize === "number" && params.sampleSize > 0
           ? Math.min(Math.floor(params.sampleSize), 100_000)
           : null;
-
-      // Default columns for default collection (d_lead). For f_lead_status use fields like lead_id, lead_status, lead_data.budget, lead_data.location; for joined data use mongo_aggregate with $lookup then export.
-      const defaultFields = [
-        "lead_id",
-        "lead_name",
-        "lead_phone_no",
-        "user_id",
-        "org_id",
-        "campaign_id",
-        "created_at",
-        "updated_at",
-      ];
-
-      const fields =
-        typeof params.fields === "string"
-          ? params.fields
-              .split(",")
-              .map((f) => f.trim())
-              .filter(Boolean)
-          : defaultFields;
+      const exportStyle =
+        typeof params.exportStyle === "string" && params.exportStyle.trim() === "leads_production"
+          ? "leads_production"
+          : "raw";
 
       const client = await getClientWithOpts();
       const db = client.db(dbName);
 
+      const isXlsx = filename.toLowerCase().endsWith(".xlsx");
+      const useProductionLeads = col === "d_lead" && exportStyle === "leads_production";
+
       let docs: Record<string, unknown>[];
-      if (sampleSize != null) {
+      let productionRows: Record<string, string>[] = [];
+      let productionColumns: string[] = [];
+
+      if (useProductionLeads) {
+        // Production leads: d_lead + $lookup d_campaign (campaign_name) and f_lead_status (lead_status, comments, lead_data).
         const pipeline: Record<string, unknown>[] = [];
         if (Object.keys(filter).length > 0) {
           pipeline.push({ $match: filter });
         }
-        pipeline.push({ $sample: { size: sampleSize } });
+        if (sampleSize != null) {
+          pipeline.push({ $sample: { size: sampleSize } });
+        }
+        pipeline.push({ $sort: sortFinal });
+        pipeline.push({
+          $lookup: {
+            from: "d_campaign",
+            let: { cid: "$campaign_id", uid: "$user_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [{ $eq: ["$campaign_id", "$$cid"] }, { $eq: ["$user_id", "$$uid"] }],
+                  },
+                },
+              },
+              { $limit: 1 },
+              { $project: { campaign_name: 1, _id: 0 } },
+            ],
+            as: "campaignDoc",
+          },
+        });
+        pipeline.push({
+          $lookup: {
+            from: "f_lead_status",
+            localField: "lead_id",
+            foreignField: "lead_id",
+            as: "statusDoc",
+          },
+        });
+        pipeline.push({
+          $addFields: {
+            campaignDoc: { $arrayElemAt: ["$campaignDoc", 0] },
+            statusDoc: { $arrayElemAt: ["$statusDoc", 0] },
+          },
+        });
         docs = (await db.collection(col).aggregate(pipeline).toArray()) as Record<
           string,
           unknown
         >[];
+
+        const leadDataKeyToCol: Record<string, string> = {
+          estimated_annual_income: "Estimated Annual Income",
+          investment_timeline: "Investment Timeline",
+          years_of_experience: "No of Years of Experience",
+          estimated_net_worth: "Estimated Net Worth",
+          risk_profile: "Risk Profile",
+          confidence_score: "Confidence Score",
+        };
+        const allLeadDataKeys = new Set<string>(Object.keys(leadDataKeyToCol));
+        for (const doc of docs) {
+          const statusDoc = doc.statusDoc as Record<string, unknown> | undefined;
+          const leadData = statusDoc?.lead_data as Record<string, unknown> | undefined;
+          if (leadData && typeof leadData === "object") {
+            for (const k of Object.keys(leadData)) {
+              if (k !== "campaign_id" && k !== "other_requirements") {
+                allLeadDataKeys.add(k);
+              }
+            }
+          }
+        }
+
+        function formatDate(v: unknown): string {
+          if (v == null) return "";
+          if (v instanceof Date) {
+            return v.toISOString().replace("T", " ").slice(0, 19);
+          }
+          if (typeof v === "object" && v !== null && "$date" in v) {
+            const d = (v as { $date: string }).$date;
+            if (typeof d === "string") return d.replace("T", " ").slice(0, 19);
+          }
+          return String(v);
+        }
+        function strVal(v: unknown): string {
+          if (v == null) return "";
+          if (typeof v === "object") return JSON.stringify(v);
+          return String(v);
+        }
+
+        productionColumns = [
+          "Lead Name",
+          "Lead Phone Number",
+          "Lead Company",
+          "Addition Date",
+          "Campaign Name",
+          "Lead Email",
+          "Lead Address",
+          "Lead Status",
+          "Comments",
+          ...Array.from(allLeadDataKeys).map(
+            (k) =>
+              leadDataKeyToCol[k] ??
+              k
+                .split("_")
+                .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                .join(" "),
+          ),
+        ];
+
+        for (const doc of docs) {
+          const statusDoc = doc.statusDoc as Record<string, unknown> | undefined;
+          const campaignDoc = doc.campaignDoc as { campaign_name?: string } | undefined;
+          const leadData = statusDoc?.lead_data as Record<string, unknown> | undefined;
+          const row: Record<string, string> = {
+            "Lead Name": strVal(doc.lead_name),
+            "Lead Phone Number": strVal(doc.lead_phone_no),
+            "Lead Company": strVal(doc.lead_company),
+            "Addition Date": formatDate(doc.created_at),
+            "Campaign Name": strVal(campaignDoc?.campaign_name),
+            "Lead Email": strVal(doc.lead_email),
+            "Lead Address": strVal(doc.lead_address),
+            "Lead Status": strVal(statusDoc?.lead_status),
+            Comments: strVal(statusDoc?.comments),
+          };
+          for (const k of allLeadDataKeys) {
+            const colName =
+              leadDataKeyToCol[k] ??
+              k
+                .split("_")
+                .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                .join(" ");
+            const val = leadData?.[k];
+            row[colName] =
+              val != null && typeof val !== "object"
+                ? String(val)
+                : val != null
+                  ? JSON.stringify(val)
+                  : "";
+          }
+          productionRows.push(row);
+        }
       } else {
-        docs = await db
-          .collection(col)
-          .find(filter)
-          .sort(sortFinal as Sort)
-          .toArray();
-      }
+        // Raw export
+        const defaultFields = [
+          "lead_id",
+          "lead_name",
+          "lead_phone_no",
+          "user_id",
+          "org_id",
+          "campaign_id",
+          "created_at",
+          "updated_at",
+        ];
+        const fields =
+          typeof params.fields === "string"
+            ? params.fields
+                .split(",")
+                .map((f) => f.trim())
+                .filter(Boolean)
+            : defaultFields;
 
-      // Resolve nested field value (e.g. "lead_data.budget")
-      function getNestedValue(obj: Record<string, unknown>, fieldPath: string): string {
-        const parts = fieldPath.split(".");
-        let current: unknown = obj;
-        for (const part of parts) {
-          if (current === null || current === undefined || typeof current !== "object") {
-            return "";
+        if (sampleSize != null) {
+          const pipeline: Record<string, unknown>[] = [];
+          if (Object.keys(filter).length > 0) {
+            pipeline.push({ $match: filter });
           }
-          current = (current as Record<string, unknown>)[part];
+          pipeline.push({ $sample: { size: sampleSize } });
+          docs = (await db.collection(col).aggregate(pipeline).toArray()) as Record<
+            string,
+            unknown
+          >[];
+        } else {
+          docs = await db
+            .collection(col)
+            .find(filter)
+            .sort(sortFinal as Sort)
+            .toArray();
         }
-        if (current === null || current === undefined) {
-          return "";
-        }
-        if (current instanceof Date) {
-          return current.toISOString();
-        }
-        if (typeof current === "object") {
-          // Handle MongoDB $date objects
-          const dateObj = current as Record<string, unknown>;
-          if (dateObj.$date) {
-            return String(dateObj.$date);
+
+        function getNestedValue(obj: Record<string, unknown>, fieldPath: string): string {
+          const parts = fieldPath.split(".");
+          let current: unknown = obj;
+          for (const part of parts) {
+            if (current === null || current === undefined || typeof current !== "object") {
+              return "";
+            }
+            current = (current as Record<string, unknown>)[part];
           }
-          return JSON.stringify(current);
+          if (current === null || current === undefined) return "";
+          if (current instanceof Date) return current.toISOString();
+          if (typeof current === "object") {
+            const dateObj = current as Record<string, unknown>;
+            if (dateObj.$date) return String(dateObj.$date);
+            return JSON.stringify(current);
+          }
+          return String(current);
         }
-        return String(current);
-      }
-
-      function escapeCsvField(value: string): string {
-        if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-          return `"${value.replace(/"/g, '""')}"`;
+        function escapeCsvField(value: string): string {
+          if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+            return `"${value.replace(/"/g, '""')}"`;
+          }
+          return value;
         }
-        return value;
+        const header = fields.map(escapeCsvField).join(",");
+        const rows = docs.map((doc) =>
+          fields
+            .map((f) => escapeCsvField(getNestedValue(doc as Record<string, unknown>, f)))
+            .join(","),
+        );
+        const csv = [header, ...rows].join("\n");
+
+        const stateDir =
+          process.env.OPENCLAW_STATE_DIR ??
+          path.join(process.cwd(), ".openclaw-local") ??
+          path.join(os.homedir(), ".openclaw");
+        const fixitExportsDir = path.join(stateDir, "fixit-exports");
+        if (!fs.existsSync(fixitExportsDir)) {
+          fs.mkdirSync(fixitExportsDir, { recursive: true });
+        }
+        const filePath = path.join(fixitExportsDir, filename);
+        if (isXlsx) {
+          const wb = XLSX.utils.book_new();
+          const ws = XLSX.utils.json_to_sheet(
+            docs.map((d) => {
+              const out: Record<string, unknown> = {};
+              for (const f of fields) {
+                const v = getNestedValue(d as Record<string, unknown>, f);
+                const title = f.split(".").pop() ?? f;
+                out[title] = v;
+              }
+              return out;
+            }),
+          );
+          XLSX.utils.book_append_sheet(wb, ws, "Leads");
+          XLSX.writeFile(wb, filePath);
+        } else {
+          fs.writeFileSync(filePath, csv, "utf-8");
+        }
+        const sizeBytes = isXlsx
+          ? (fs.statSync(filePath).size as number)
+          : Buffer.byteLength(csv, "utf-8");
+        return jsonResult({
+          exported: docs.length,
+          fields: fields.length,
+          filePath,
+          filename,
+          sizeBytes,
+          message: `Exported ${docs.length} rows to ${filePath}`,
+          downloadLink: `[Download ${filename}](${pathToFileURL(filePath).href})`,
+          downloadInstruction:
+            "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable link to the local file (file://). For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
+          messageToolParams: {
+            action: "sendAttachment",
+            media: filePath,
+            message: `Leads export (${docs.length} rows).`,
+          },
+        });
       }
 
-      const header = fields.map(escapeCsvField).join(",");
-      const rows = docs.map((doc) =>
-        fields
-          .map((f) => escapeCsvField(getNestedValue(doc as Record<string, unknown>, f)))
-          .join(","),
-      );
-
-      const csv = [header, ...rows].join("\n");
-
-      // Write to workspace (OpenClaw canvas dir or home dir)
-      const homeDir = os.homedir();
-      const openclawDir = path.join(homeDir, ".openclaw");
-      const workspaceDir = path.join(openclawDir, "workspace");
-      if (!fs.existsSync(workspaceDir)) {
-        fs.mkdirSync(workspaceDir, { recursive: true });
+      // Production leads path: write productionRows to CSV or XLSX
+      const stateDir =
+        process.env.OPENCLAW_STATE_DIR ??
+        path.join(process.cwd(), ".openclaw-local") ??
+        path.join(os.homedir(), ".openclaw");
+      const fixitExportsDir = path.join(stateDir, "fixit-exports");
+      if (!fs.existsSync(fixitExportsDir)) {
+        fs.mkdirSync(fixitExportsDir, { recursive: true });
       }
-      const filePath = path.join(workspaceDir, filename);
-      fs.writeFileSync(filePath, csv, "utf-8");
+      const filePath = path.join(fixitExportsDir, filename);
 
+      if (isXlsx) {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(productionRows, { header: productionColumns });
+        XLSX.utils.book_append_sheet(wb, ws, "Leads");
+        XLSX.writeFile(wb, filePath);
+      } else {
+        function escapeCsvField(value: string): string {
+          if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+            return `"${value.replace(/"/g, '""')}"`;
+          }
+          return value;
+        }
+        const header = productionColumns.map(escapeCsvField).join(",");
+        const rows = productionRows.map((row) =>
+          productionColumns.map((c) => escapeCsvField(row[c] ?? "")).join(","),
+        );
+        const csv = [header, ...rows].join("\n");
+        fs.writeFileSync(filePath, csv, "utf-8");
+      }
+      const sizeBytes = fs.statSync(filePath).size as number;
       return jsonResult({
-        exported: docs.length,
-        fields: fields.length,
+        exported: productionRows.length,
+        fields: productionColumns.length,
         filePath,
         filename,
-        sizeBytes: Buffer.byteLength(csv, "utf-8"),
-        message: `Exported ${docs.length} leads to ${filePath}`,
-        downloadLink: `[Download ${filename}](/api/fixit/files/download?path=${encodeURIComponent(filePath)})`,
+        sizeBytes,
+        message: `Exported ${productionRows.length} leads to ${filePath}`,
+        downloadLink: `[Download ${filename}](${pathToFileURL(filePath).href})`,
         downloadInstruction:
-          "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download button. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
+          "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable link to the local file (file://). For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
         messageToolParams: {
           action: "sendAttachment",
           media: filePath,
-          message: `Leads export (${docs.length} rows).`,
+          message: `Leads export (${productionRows.length} rows).`,
         },
       });
     },
   };
 
   // ------ send_file_to_chat ------
-  const workspaceDir = path.join(os.homedir(), ".openclaw", "workspace");
+  const stateDirForSend =
+    process.env.OPENCLAW_STATE_DIR ??
+    path.join(process.cwd(), ".openclaw-local") ??
+    path.join(os.homedir(), ".openclaw");
+  const workspaceDir = path.join(stateDirForSend, "workspace");
+  const fixitExportsDirForSend = path.join(stateDirForSend, "fixit-exports");
 
   const sendFileToChatTool: AnyAgentTool = {
     name: "send_file_to_chat",
     label: "Send file to chat",
-    description: `Send a file that is already on disk (e.g. a CSV exported by mongo_export_csv) to the user in the current chat. The file must be under the OpenClaw workspace directory (~/.openclaw/workspace). Use this when the user asked for an Excel/CSV and you have already exported it — pass the filePath returned by mongo_export_csv and a short caption. You MUST then call the message tool with action sendAttachment, media set to the returned filePath, and message set to the caption, so the file is delivered in Telegram/WhatsApp/etc.`,
+    description: `Send a file that is already on disk (e.g. a CSV exported by mongo_export_csv) to the user in the current chat. The file must be under the OpenClaw workspace or fixit-exports directory. Use this when the user asked for an Excel/CSV and you have already exported it — pass the filePath returned by mongo_export_csv and a short caption. You MUST then call the message tool with action sendAttachment, media set to the returned filePath, and message set to the caption, so the file is delivered in Telegram/WhatsApp/etc.`,
     parameters: {
       type: "object",
       properties: {
         filePath: {
           type: "string",
           description:
-            "Full path to the file (e.g. /Users/you/.openclaw/workspace/all_leads_export.csv). Must be under ~/.openclaw/workspace.",
+            "Full path to the file (e.g. from mongo_export_csv). Must be under workspace or fixit-exports.",
         },
         caption: {
           type: "string",
@@ -1030,12 +1247,14 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         rawPath.startsWith("~") ? rawPath.replace("~", os.homedir()) : rawPath,
       );
       const resolvedWorkspace = path.resolve(workspaceDir);
-      if (
-        resolvedPath !== resolvedWorkspace &&
-        !resolvedPath.startsWith(resolvedWorkspace + path.sep)
-      ) {
+      const resolvedExports = path.resolve(fixitExportsDirForSend);
+      const underWorkspace =
+        resolvedPath === resolvedWorkspace || resolvedPath.startsWith(resolvedWorkspace + path.sep);
+      const underExports =
+        resolvedPath === resolvedExports || resolvedPath.startsWith(resolvedExports + path.sep);
+      if (!underWorkspace && !underExports) {
         throw new Error(
-          `File must be under the workspace directory (${resolvedWorkspace}). Got: ${resolvedPath}`,
+          `File must be under workspace (${resolvedWorkspace}) or fixit-exports (${resolvedExports}). Got: ${resolvedPath}`,
         );
       }
       if (!fs.existsSync(resolvedPath)) {
