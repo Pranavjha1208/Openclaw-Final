@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { BlobServiceClient } from "@azure/storage-blob";
 import { MongoClient, ObjectId, type Sort } from "mongodb";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
 import { transliterate } from "transliteration";
@@ -30,6 +31,85 @@ function jsonResult(payload: unknown): ToolResult {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     details: payload,
   };
+}
+
+type AzureBlobConfig = {
+  connectionString: string;
+  containerName: string;
+};
+
+function getAzureBlobConfig(): AzureBlobConfig | null {
+  const connectionString =
+    process.env.BLOB_STORAGE_URL?.trim() ??
+    process.env.FIXIT_AZURE_BLOB_CONNECTION_STRING?.trim() ??
+    "";
+  const containerName =
+    process.env.AZURE_BLOB_CONTAINER?.trim() ??
+    process.env.FIXIT_AZURE_BLOB_CONTAINER?.trim() ??
+    "openclaw-chatbot";
+
+  if (!connectionString || !containerName) {
+    return null;
+  }
+
+  return {
+    connectionString,
+    containerName,
+  };
+}
+
+function guessContentType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case ".xls":
+      return "application/vnd.ms-excel";
+    case ".csv":
+      return "text/csv";
+    case ".json":
+      return "application/json";
+    case ".txt":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+async function uploadExportToAzureBlob(params: {
+  localPath: string;
+  senderId: string;
+  filename: string;
+}): Promise<string | null> {
+  const cfg = getAzureBlobConfig();
+  if (!cfg) {
+    return null;
+  }
+
+  const blobServiceClient = BlobServiceClient.fromConnectionString(cfg.connectionString);
+  const containerClient = blobServiceClient.getContainerClient(cfg.containerName);
+  await containerClient.createIfNotExists({ access: "blob" });
+  await containerClient.setAccessPolicy("blob");
+
+  const safeSenderId = params.senderId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeFilename = path.basename(params.filename).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(now.getUTCDate()).padStart(2, "0");
+  const blobName = `data-insights/${safeSenderId}/${yyyy}/${mm}/${dd}/${Date.now()}-${safeFilename}`;
+
+  const blobClient = containerClient.getBlockBlobClient(blobName);
+  const contentType = guessContentType(params.localPath);
+  await blobClient.uploadFile(params.localPath, {
+    blobHTTPHeaders: { blobContentType: contentType },
+    metadata: {
+      sender_id: safeSenderId,
+      uploaded_by: "openclaw-fixit",
+    },
+  });
+
+  return blobClient.url;
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +518,48 @@ function createMongoTools(
   const getClientWithOpts = () => getClient(uri, clientOptions);
   const orgId = fixitScope?.orgId ?? leadDefaults?.org_id ?? DEFAULT_LEAD_ORG_ID;
   const userId = fixitScope?.userId ?? leadDefaults?.user_id ?? DEFAULT_LEAD_USER_ID;
-  const campaignId = leadDefaults?.campaign_id ?? DEFAULT_LEAD_CAMPAIGN_ID;
+  const campaignId =
+    fixitScope?.campaignId ?? leadDefaults?.campaign_id ?? DEFAULT_LEAD_CAMPAIGN_ID;
+
+  function enforceScopeOnDocument(
+    col: string,
+    doc: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!fixitScope || (col !== "d_lead" && !ORG_SCOPED_COLLECTIONS.has(col))) {
+      return doc;
+    }
+    const enforced: Record<string, unknown> = {
+      ...doc,
+      org_id: fixitScope.orgId,
+      user_id: fixitScope.userId,
+    };
+    if (fixitScope.campaignId) {
+      enforced.campaign_id = fixitScope.campaignId;
+    }
+    return enforced;
+  }
+
+  function enforceScopeOnUpdate(
+    col: string,
+    update: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!fixitScope || (col !== "d_lead" && !ORG_SCOPED_COLLECTIONS.has(col))) {
+      return update;
+    }
+    const hasOperator = Object.keys(update).some((k) => k.startsWith("$"));
+    const normalized = hasOperator ? { ...update } : { $set: { ...update } };
+    const setPayload =
+      normalized.$set && typeof normalized.$set === "object" && !Array.isArray(normalized.$set)
+        ? { ...(normalized.$set as Record<string, unknown>) }
+        : {};
+    setPayload.org_id = fixitScope.orgId;
+    setPayload.user_id = fixitScope.userId;
+    if (fixitScope.campaignId) {
+      setPayload.campaign_id = fixitScope.campaignId;
+    }
+    normalized.$set = setPayload;
+    return normalized;
+  }
   // ------ mongo_find ------
   const findTool: AnyAgentTool = {
     name: "mongo_find",
@@ -550,7 +671,13 @@ For d_lead include: user_id, org_id, lead_id, lead_name, lead_phone_no, campaign
         if (!Array.isArray(rawDocs)) {
           throw new Error("documents must be a JSON array");
         }
-        const result = await db.collection(col).insertMany(rawDocs);
+        const docs = rawDocs.map((doc) => {
+          if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+            throw new Error("each document must be a JSON object");
+          }
+          return enforceScopeOnDocument(col, doc as Record<string, unknown>);
+        });
+        const result = await db.collection(col).insertMany(docs);
         return jsonResult({
           inserted: result.insertedCount,
           insertedIds: result.insertedIds,
@@ -561,7 +688,7 @@ For d_lead include: user_id, org_id, lead_id, lead_name, lead_phone_no, campaign
       if (Object.keys(doc).length === 0) {
         throw new Error("document is required and must not be empty");
       }
-      const result = await db.collection(col).insertOne(doc);
+      const result = await db.collection(col).insertOne(enforceScopeOnDocument(col, doc));
       return jsonResult({ insertedId: result.insertedId });
     },
   };
@@ -590,9 +717,9 @@ For d_lead include: user_id, org_id, lead_id, lead_name, lead_phone_no, campaign
       const db = client.db(dbName);
       const now = new Date().toISOString();
       const leadId = `lead_${crypto.randomUUID()}`;
-      const oid = (params.org_id as string)?.trim() || orgId;
-      const uid = (params.user_id as string)?.trim() || userId;
-      const cid = (params.campaign_id as string)?.trim() || campaignId;
+      const oid = fixitScope ? fixitScope.orgId : (params.org_id as string)?.trim() || orgId;
+      const uid = fixitScope ? fixitScope.userId : (params.user_id as string)?.trim() || userId;
+      const cid = fixitScope?.campaignId ?? ((params.campaign_id as string)?.trim() || campaignId);
 
       const leadDoc: Record<string, unknown> = {
         lead_id: leadId,
@@ -711,8 +838,7 @@ Do NOT use $unset, $pull, $pullAll, or any operator that removes data — delete
       }
 
       // Auto-wrap plain field updates in $set if no operator keys present
-      const hasOperator = Object.keys(update).some((k) => k.startsWith("$"));
-      const mongoUpdate = hasOperator ? update : { $set: update };
+      const mongoUpdate = enforceScopeOnUpdate(col, update);
 
       // Expand string _id to ObjectId in filter
       if (typeof filter._id === "string") {
@@ -1143,6 +1269,20 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         const sizeBytes = isXlsx
           ? (fs.statSync(filePath).size as number)
           : Buffer.byteLength(csv, "utf-8");
+        const blobUrl =
+          docs.length > 5
+            ? await uploadExportToAzureBlob({
+                localPath: filePath,
+                senderId: userId,
+                filename,
+              })
+            : null;
+        if (docs.length > 5 && !blobUrl) {
+          throw new Error(
+            "Azure Blob upload is required for exports above 5 rows. Set BLOB_STORAGE_URL and AZURE_BLOB_CONTAINER.",
+          );
+        }
+        const downloadUrl = blobUrl ?? pathToFileURL(filePath).href;
         return jsonResult({
           exported: docs.length,
           fields: fields.length,
@@ -1150,9 +1290,10 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
           filename,
           sizeBytes,
           message: `Exported ${docs.length} rows to ${filePath}`,
-          downloadLink: `[Download ${filename}](${pathToFileURL(filePath).href})`,
+          downloadLink: `[Download ${filename}](${downloadUrl})`,
+          blobUrl,
           downloadInstruction:
-            "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable link to the local file (file://). For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
+            "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download link. Prefer the returned blob URL when present. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
           messageToolParams: {
             action: "sendAttachment",
             media: filePath,
@@ -1192,6 +1333,20 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         fs.writeFileSync(filePath, csv, "utf-8");
       }
       const sizeBytes = fs.statSync(filePath).size as number;
+      const blobUrl =
+        productionRows.length > 5
+          ? await uploadExportToAzureBlob({
+              localPath: filePath,
+              senderId: userId,
+              filename,
+            })
+          : null;
+      if (productionRows.length > 5 && !blobUrl) {
+        throw new Error(
+          "Azure Blob upload is required for exports above 5 rows. Set BLOB_STORAGE_URL and AZURE_BLOB_CONTAINER.",
+        );
+      }
+      const downloadUrl = blobUrl ?? pathToFileURL(filePath).href;
       return jsonResult({
         exported: productionRows.length,
         fields: productionColumns.length,
@@ -1199,9 +1354,10 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         filename,
         sizeBytes,
         message: `Exported ${productionRows.length} leads to ${filePath}`,
-        downloadLink: `[Download ${filename}](${pathToFileURL(filePath).href})`,
+        downloadLink: `[Download ${filename}](${downloadUrl})`,
+        blobUrl,
         downloadInstruction:
-          "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable link to the local file (file://). For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
+          "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download link. Prefer the returned blob URL when present. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
         messageToolParams: {
           action: "sendAttachment",
           media: filePath,

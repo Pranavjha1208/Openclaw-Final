@@ -15,9 +15,11 @@ export function buildFixitSessionKey(params: {
   agentId: string;
   orgId: string;
   userId: string;
+  campaignId?: string;
   sessionId?: string;
 }): string {
-  const base = `agent:${params.agentId}:fixit:org:${params.orgId}:user:${params.userId}`;
+  const campaignPart = params.campaignId?.trim() ? `:campaign:${params.campaignId.trim()}` : "";
+  const base = `agent:${params.agentId}:fixit:org:${params.orgId}:user:${params.userId}${campaignPart}`;
   return params.sessionId?.trim() ? `${base}:session:${params.sessionId.trim()}` : base;
 }
 
@@ -41,6 +43,7 @@ export function buildFixitSessionKeyForIdentity(
     agentId,
     orgId: identity.orgId,
     userId: identity.userId,
+    campaignId: identity.campaignId,
     sessionId,
   });
 }

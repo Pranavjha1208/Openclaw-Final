@@ -155,20 +155,82 @@ export async function getOrCreateFixitSession(
 ): Promise<GetOrCreateFixitSessionResult> {
   const client = await getClient(mongoUri);
   const db = client.db(mongoDatabase);
+  const requestedCampaignId = identity.campaignId?.trim() || null;
 
-  const filter = frontendSessionId
-    ? { user_id: identity.userId, session_id: frontendSessionId, channel_type: channelType }
-    : { user_id: identity.userId, end_time: null, channel_type: channelType };
-
-  const existing = await db.collection("f_user_sessions").findOne(filter);
+  const baseFilter = {
+    user_id: identity.userId,
+    channel_type: channelType,
+    "metadata.org_id": identity.orgId,
+  };
+  const existing = frontendSessionId
+    ? await db.collection("f_user_sessions").findOne({
+        ...baseFilter,
+        session_id: frontendSessionId,
+      })
+    : await db.collection("f_user_sessions").findOne({
+        ...baseFilter,
+        end_time: null,
+        ...(requestedCampaignId
+          ? { "metadata.campaign_id": requestedCampaignId }
+          : {
+              $or: [
+                { "metadata.campaign_id": null },
+                { "metadata.campaign_id": { $exists: false } },
+              ],
+            }),
+      });
 
   if (existing) {
-    await db
-      .collection("f_user_sessions")
-      .updateOne(
-        { _id: existing._id },
-        { $set: { updated_at: new Date(), "metadata.openclaw_session_key": sessionKey } },
+    const existingCampaignId =
+      existing &&
+      typeof existing.metadata === "object" &&
+      existing.metadata !== null &&
+      typeof (existing.metadata as { campaign_id?: unknown }).campaign_id === "string"
+        ? (((existing.metadata as { campaign_id?: string }).campaign_id as string) || "").trim() ||
+          null
+        : null;
+
+    if (frontendSessionId && existingCampaignId !== requestedCampaignId) {
+      const messageCount = await db.collection("f_user_messages").countDocuments({
+        user_id: identity.userId,
+        session_id: existing._id,
+      });
+
+      // Allow first message to bind a just-created empty session to the selected campaign.
+      if (messageCount === 0) {
+        await db.collection("f_user_sessions").updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              updated_at: new Date(),
+              "metadata.org_id": identity.orgId,
+              "metadata.campaign_id": requestedCampaignId,
+              "metadata.openclaw_session_key": sessionKey,
+            },
+          },
+        );
+        return {
+          sessionObjectId: existing._id,
+          sessionUuid: existing.session_id as string,
+        };
+      }
+
+      throw new Error(
+        `Session campaign scope mismatch: session belongs to ${existingCampaignId ?? "baseline"} but request asked for ${requestedCampaignId ?? "baseline"}`,
       );
+    }
+
+    await db.collection("f_user_sessions").updateOne(
+      { _id: existing._id },
+      {
+        $set: {
+          updated_at: new Date(),
+          "metadata.org_id": identity.orgId,
+          "metadata.campaign_id": requestedCampaignId,
+          "metadata.openclaw_session_key": sessionKey,
+        },
+      },
+    );
     return {
       sessionObjectId: existing._id,
       sessionUuid: existing.session_id as string,
@@ -182,7 +244,13 @@ export async function getOrCreateFixitSession(
     start_time: new Date(),
     end_time: null,
     channel_type: channelType,
-    metadata: { org_id: identity.orgId, source: "web_ui", openclaw_session_key: sessionKey },
+    metadata: {
+      org_id: identity.orgId,
+      campaign_id: requestedCampaignId,
+      source: "web_ui",
+      openclaw_session_key: sessionKey,
+      title: "New chat",
+    },
     created_at: new Date(),
     updated_at: new Date(),
   });

@@ -157,10 +157,10 @@ function buildConversationMemory(
 
 function buildExportRules(): string {
   return `EXCEL/CSV EXPORT RULES:
-- When the user requests lead data and the result would contain MORE THAN 10 rows, you MUST use mongo_export_csv to generate a file instead of listing them in chat.
+- When the user requests lead data and the result would contain MORE THAN 5 rows, you MUST use mongo_export_csv to generate a file instead of listing them in chat.
 - For production-quality leads export (Campaign Name, Lead Status, Comments, enrichment columns): use mongo_export_csv with collection d_lead, exportStyle "leads_production", and filename ending in .xlsx when the user asks for Excel (e.g. all_leads_<org_id>.xlsx). For CSV use the same exportStyle and .csv filename.
-- After exporting, provide the download link returned by the tool (file:// URL so the user can open the file directly).
-- For 10 or fewer rows, show data inline as a markdown table.`;
+- After exporting, provide the download link returned by the tool. When Azure Blob upload is configured, this will be a signed blob URL.
+- For 5 or fewer rows, show data inline as a markdown table.`;
 }
 
 function buildFormattingRules(): string {

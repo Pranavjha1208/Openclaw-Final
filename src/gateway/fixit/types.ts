@@ -21,6 +21,8 @@ export type FixitIdentity = {
 export type FixitChatSendBody = {
   message: string;
   sessionId?: string;
+  /** Optional campaign scope from the Fixit UI. When present, all chat data/tool access is restricted to that campaign. */
+  campaignId?: string;
   idempotencyKey?: string;
   attachments?: Array<{
     type?: string;
@@ -46,6 +48,7 @@ export type FixitSseEventDone = {
   text: string;
   sessionId: string;
   runId: string;
+  chatTitle?: string;
 };
 
 export type FixitSseEventError = {
@@ -61,10 +64,13 @@ export type FixitSseEvent =
 
 export type FixitSessionInfo = {
   sessionId: string;
+  title: string;
   startTime: string;
   endTime?: string | null;
   updatedAt: string;
   channelType: FixitChannelType;
+  messageCount?: number;
+  lastMessagePreview?: string;
   metadata?: Record<string, unknown>;
 };
 

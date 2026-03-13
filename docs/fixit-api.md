@@ -84,14 +84,16 @@ Content-Type: application/json
 ```json
 {
   "message": "How many leads are qualified?",
-  "sessionId": "bfc5ffa5-1234-5678-abcd-000000000000"
+  "sessionId": "bfc5ffa5-1234-5678-abcd-000000000000",
+  "campaignId": "CAMP_BASELINE"
 }
 ```
 
-| Field       | Type   | Required | Description                                                              |
-| ----------- | ------ | -------- | ------------------------------------------------------------------------ |
-| `message`   | string | **Yes**  | The user's message text.                                                 |
-| `sessionId` | string | No       | Existing session ID. If omitted, auto-creates or reuses an open session. |
+| Field        | Type   | Required | Description                                                                                                                        |
+| ------------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `message`    | string | **Yes**  | The user's message text.                                                                                                           |
+| `sessionId`  | string | No       | Existing session ID. If omitted, auto-creates or reuses an open session.                                                           |
+| `campaignId` | string | No       | Optional campaign scope from the frontend. When present, all scoped MongoDB reads and writes are restricted to that `campaign_id`. |
 
 **Response:** SSE stream (`Content-Type: text/event-stream`)
 
