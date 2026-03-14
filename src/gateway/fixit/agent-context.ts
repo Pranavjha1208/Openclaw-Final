@@ -161,6 +161,8 @@ function buildExportRules(): string {
 - For production-quality leads export (Campaign Name, Lead Status, Comments, enrichment columns): use mongo_export_csv with collection d_lead, exportStyle "leads_production", and filename ending in .xlsx when the user asks for Excel (e.g. all_leads_<org_id>.xlsx). For CSV use the same exportStyle and .csv filename.
 - For joined filters like call_drop, call_reachout_status, status_description, lead_status, or any query that used $lookup on f_lead_status/f_lead_call, you MUST pass the SAME aggregation pipeline to mongo_export_csv via its pipeline parameter so the exported sheet matches the exact filtered result set. Do NOT export broad d_lead rows with an empty or unrelated filter.
 - After exporting, provide the download link returned by the tool. When Azure Blob upload is configured, this will be a signed blob URL.
+- In Fixit web chat, the downloadLink is the delivery method. Do NOT call the message tool or send_file_to_chat after mongo_export_csv.
+- Do NOT say the file could not be sent if a valid downloadLink was returned. Treat that as success and simply present the link.
 - For 5 or fewer rows, show data inline as a markdown table.`;
 }
 
@@ -169,7 +171,10 @@ function buildFormattingRules(): string {
 - Use markdown: **bold**, *italic*, tables, lists, headings, code blocks.
 - Format tabular results (≤10 rows) as markdown tables.
 - Wrap JSON in \`\`\`json code blocks.
-- For file downloads, use the markdown link format above.`;
+- For file downloads, use the markdown link format above.
+- When the user asks "what query did you use?", explain the query in plain English first: which base collection you searched, which collections were joined, and which REAL schema fields were filtered.
+- If you must show an aggregation pipeline, use only simple temporary join aliases like status, call, whatsapp, and crm. Do NOT invent aliases like status_data, call_data, or whatsapp_data.
+- Never present a $lookup alias as if it were a real MongoDB field. Make it clear that it is only a temporary name inside that one aggregation pipeline.`;
 }
 
 // -- Helpers --

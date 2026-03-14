@@ -12,7 +12,6 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { OpenClawConfig } from "../../config/config.js";
 import { onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { runWithFixitScope } from "../../infra/fixit-request-scope.js";
-import { resolveAssistantStreamDeltaText } from "../agent-event-assistant-text.js";
 import { readJsonBody } from "../hooks.js";
 import { sendJson, setSseHeaders } from "../http-common.js";
 import { getBearerToken } from "../http-utils.js";
@@ -789,9 +788,15 @@ export async function handleFixitHttpRequest(
     };
 
     const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         if (typeof payload.text === "string" && payload.text.trim()) {
-          fullText += payload.text;
+          const nextText = payload.text;
+          fullText += nextText;
+          writeFixitSseEventLogged({ type: "delta", text: nextText });
+          logRequest("reply-deliver", {
+            kind: info.kind,
+            text: nextText,
+          });
         }
       },
     });
@@ -801,13 +806,6 @@ export async function handleFixitHttpRequest(
         return;
       }
 
-      if (evt.stream === "assistant") {
-        const text = resolveAssistantStreamDeltaText(evt);
-        if (text) {
-          writeFixitSseEventLogged({ type: "delta", text });
-        }
-        return;
-      }
       if (evt.stream === "tool") {
         const name = typeof evt.data?.name === "string" ? evt.data.name : "tool";
         const status =
@@ -821,9 +819,7 @@ export async function handleFixitHttpRequest(
       }
       if (evt.stream === "lifecycle") {
         const phase = evt.data?.phase;
-        if (phase === "end" || phase === "error") {
-          sendDone();
-        }
+        logRequest("agent-lifecycle", { phase });
       }
     });
 

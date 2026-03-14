@@ -303,6 +303,7 @@ elevenlabs_voices: Voice catalog. Fields: voice_id (unique), name, labels (Dict)
 
 == JOINS ==
 Use mongo_aggregate on d_lead with $lookup to join related collections on lead_id. Example: [{"$match":{...}},{"$lookup":{"from":"f_lead_status","localField":"lead_id","foreignField":"lead_id","as":"status"}},{"$lookup":{"from":"f_lead_call","localField":"lead_id","foreignField":"lead_id","as":"call"}},{"$lookup":{"from":"f_lead_whatsapp","localField":"lead_id","foreignField":"lead_id","as":"whatsapp"}},{"$lookup":{"from":"d_lead_crm","localField":"lead_id","foreignField":"lead_id","as":"crm"}},{"$unwind":{"path":"$status","preserveNullAndEmptyArrays":true}},{"$unwind":{"path":"$call","preserveNullAndEmptyArrays":true}},{"$unwind":{"path":"$whatsapp","preserveNullAndEmptyArrays":true}},{"$unwind":{"path":"$crm","preserveNullAndEmptyArrays":true}}].
+- IMPORTANT: $lookup "as" fields like status, call, whatsapp, and crm are TEMPORARY pipeline aliases only. They are not real database fields or schema columns. Never describe them to the user as if they exist in MongoDB documents.
 `.trim();
 
 const CONTEXT_AND_ADVANCED_FILTERS = `
@@ -358,6 +359,9 @@ IMPORTANT: If you are unsure which collection a field belongs to, check the sche
 - For lists, show key fields (name, phone, status) in a readable format, not full document dumps.
 - When no results are found, explain what was searched and suggest alternatives (e.g. different filters or collections).
 - If the query is ambiguous or you need more info (like org_id, campaign_id, date range), ASK the user before querying.
+- If the user asks "what query did you use?", explain it in plain English first: base collection, joins, and actual schema fields used. Only show a pipeline if truly needed.
+- If you show an aggregation pipeline, use simple temporary aliases only: status, call, whatsapp, crm. Do NOT invent names like status_data, call_data, or whatsapp_data.
+- Never call a temporary $lookup alias a "field that exists". Say "temporary join alias" or avoid mentioning the alias entirely.
 `.trim();
 
 // ---------------------------------------------------------------------------
@@ -990,7 +994,7 @@ RESPONSE: Present aggregation results in a clear, summarized format. Do NOT dump
   const exportCsvTool: AnyAgentTool = {
     name: "mongo_export_csv",
     label: "MongoDB Export CSV",
-    description: `Export matching documents from a collection to CSV or Excel. Collections: ${COLLECTION_LIST}. Use when the user asks for an Excel/CSV/spreadsheet of leads. For production-quality leads (Campaign Name, Lead Status, Comments, enrichment): use collection d_lead, exportStyle "leads_production", and filename ending in .xlsx (Excel) or .csv. Returns file path and download link. For "100 random leads" use sampleSize: 100. Without sampleSize, exports ALL matching documents. After exporting, include the returned downloadLink in your reply. For Telegram/WhatsApp use the message tool with action sendAttachment and media set to filePath.
+    description: `Export matching documents from a collection to CSV or Excel. Collections: ${COLLECTION_LIST}. Use when the user asks for an Excel/CSV/spreadsheet of leads. For production-quality leads (Campaign Name, Lead Status, Comments, enrichment): use collection d_lead, exportStyle "leads_production", and filename ending in .xlsx (Excel) or .csv. Returns file path and download link. For "100 random leads" use sampleSize: 100. Without sampleSize, exports ALL matching documents. After exporting, include the returned downloadLink in your reply. In Fixit web chat, the downloadLink is the final delivery method. Only use the message tool with action sendAttachment for channels like Telegram/WhatsApp where direct media sending is actually required.
 
 ${CONTEXT_AND_ADVANCED_FILTERS}`,
     parameters: {
@@ -1395,7 +1399,7 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
           downloadLink: `[Download ${filename}](${downloadUrl})`,
           blobUrl,
           downloadInstruction:
-            "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download link. Prefer the returned blob URL when present. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
+            "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download link. Prefer the returned blob URL when present. In Fixit web chat, stop there and do not call message or send_file_to_chat. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
           messageToolParams: {
             action: "sendAttachment",
             media: filePath,
@@ -1459,7 +1463,7 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         downloadLink: `[Download ${filename}](${downloadUrl})`,
         blobUrl,
         downloadInstruction:
-          "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download link. Prefer the returned blob URL when present. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
+          "IMPORTANT: Include the downloadLink markdown above in your response so the user sees a clickable download link. Prefer the returned blob URL when present. In Fixit web chat, stop there and do not call message or send_file_to_chat. For Telegram/WhatsApp, use the message tool with action sendAttachment instead.",
         messageToolParams: {
           action: "sendAttachment",
           media: filePath,
@@ -1480,7 +1484,7 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
   const sendFileToChatTool: AnyAgentTool = {
     name: "send_file_to_chat",
     label: "Send file to chat",
-    description: `Send a file that is already on disk (e.g. a CSV exported by mongo_export_csv) to the user in the current chat. The file must be under the OpenClaw workspace or fixit-exports directory. Use this when the user asked for an Excel/CSV and you have already exported it — pass the filePath returned by mongo_export_csv and a short caption. You MUST then call the message tool with action sendAttachment, media set to the returned filePath, and message set to the caption, so the file is delivered in Telegram/WhatsApp/etc.`,
+    description: `Send a file that is already on disk (e.g. a CSV exported by mongo_export_csv) to the user in the current chat. The file must be under the OpenClaw workspace or fixit-exports directory. Use this only for channels that require direct media delivery, such as Telegram/WhatsApp. Do NOT use this in Fixit web chat because mongo_export_csv already returns the correct downloadLink for the user.`,
     parameters: {
       type: "object",
       properties: {
