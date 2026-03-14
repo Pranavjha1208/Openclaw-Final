@@ -201,6 +201,29 @@ function convertFilterDateStrings(obj: Record<string, unknown>): Record<string, 
   return out;
 }
 
+function convertWriteDateValues(value: unknown): unknown {
+  if (typeof value === "string" && ISO_DATE_STRING.test(value)) {
+    return new Date(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => convertWriteDateValues(entry));
+  }
+  if (value !== null && typeof value === "object" && !(value instanceof Date)) {
+    if (
+      "$date" in (value as Record<string, unknown>) &&
+      typeof (value as { $date?: unknown }).$date === "string"
+    ) {
+      return new Date((value as { $date: string }).$date);
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = convertWriteDateValues(entry);
+    }
+    return out;
+  }
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Schema description embedded in tool descriptions so the LLM knows the shape
 // ---------------------------------------------------------------------------
@@ -675,7 +698,10 @@ For d_lead include: user_id, org_id, lead_id, lead_name, lead_phone_no, campaign
           if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
             throw new Error("each document must be a JSON object");
           }
-          return enforceScopeOnDocument(col, doc as Record<string, unknown>);
+          return enforceScopeOnDocument(
+            col,
+            convertWriteDateValues(doc as Record<string, unknown>) as Record<string, unknown>,
+          );
         });
         const result = await db.collection(col).insertMany(docs);
         return jsonResult({
@@ -688,7 +714,8 @@ For d_lead include: user_id, org_id, lead_id, lead_name, lead_phone_no, campaign
       if (Object.keys(doc).length === 0) {
         throw new Error("document is required and must not be empty");
       }
-      const result = await db.collection(col).insertOne(enforceScopeOnDocument(col, doc));
+      const normalizedDoc = convertWriteDateValues(doc) as Record<string, unknown>;
+      const result = await db.collection(col).insertOne(enforceScopeOnDocument(col, normalizedDoc));
       return jsonResult({ insertedId: result.insertedId });
     },
   };
@@ -715,7 +742,7 @@ For d_lead include: user_id, org_id, lead_id, lead_name, lead_phone_no, campaign
     async execute(_toolCallId: string, params: Record<string, unknown>) {
       const client = await getClientWithOpts();
       const db = client.db(dbName);
-      const now = new Date().toISOString();
+      const now = new Date();
       const leadId = `lead_${crypto.randomUUID()}`;
       const oid = fixitScope ? fixitScope.orgId : (params.org_id as string)?.trim() || orgId;
       const uid = fixitScope ? fixitScope.userId : (params.user_id as string)?.trim() || userId;
@@ -838,7 +865,10 @@ Do NOT use $unset, $pull, $pullAll, or any operator that removes data — delete
       }
 
       // Auto-wrap plain field updates in $set if no operator keys present
-      const mongoUpdate = enforceScopeOnUpdate(col, update);
+      const mongoUpdate = enforceScopeOnUpdate(
+        col,
+        convertWriteDateValues(update) as Record<string, unknown>,
+      );
 
       // Expand string _id to ObjectId in filter
       if (typeof filter._id === "string") {

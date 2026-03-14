@@ -155,9 +155,14 @@ async function resolveFixitIdentity(
   req: IncomingMessage,
   res: ServerResponse,
   fixitConfig: FixitConfigResolved,
+  logRequest?: (phase: string, details?: Record<string, unknown>) => void,
 ): Promise<FixitIdentity | null> {
   const token = getBearerToken(req);
   if (!token) {
+    logRequest?.("auth", {
+      outcome: "missing_authorization_header",
+      authMode: fixitConfig.authMode,
+    });
     console.log("[fixit] auth: missing Authorization header");
     sendJson(res, 401, { error: "Missing Authorization header" });
     return null;
@@ -169,6 +174,14 @@ async function resolveFixitIdentity(
         token,
         fixitConfig.firebaseProjectId,
       );
+      logRequest?.("auth", {
+        outcome: "firebase_verified",
+        authMode: fixitConfig.authMode,
+        token: token,
+        firebaseProjectId: fixitConfig.firebaseProjectId,
+        userIdFromJwt,
+        phoneNumber,
+      });
       console.log(`[fixit] auth: JWT userId=${userIdFromJwt} phoneNumber=${phoneNumber ?? "—"}`);
       const resolved = await getOrgIdForUser(
         userIdFromJwt,
@@ -177,12 +190,25 @@ async function resolveFixitIdentity(
         phoneNumber,
       );
       if (!resolved) {
+        logRequest?.("auth", {
+          outcome: "user_org_not_found",
+          authMode: fixitConfig.authMode,
+          token,
+          userIdFromJwt,
+          phoneNumber,
+        });
         console.log(
           `[fixit] auth: user not in d_user (userIdFromJwt=${userIdFromJwt.slice(0, 12)}… phone=${phoneNumber ?? "—"})`,
         );
         sendJson(res, 403, { error: "User organization not found" });
         return null;
       }
+      logRequest?.("auth", {
+        outcome: "identity_resolved",
+        authMode: fixitConfig.authMode,
+        orgId: resolved.orgId,
+        userId: resolved.userId,
+      });
       console.log(`[fixit] auth: from d_user orgId=${resolved.orgId} userId=${resolved.userId}`);
       const identity: FixitIdentity = {
         orgId: resolved.orgId,
@@ -191,6 +217,12 @@ async function resolveFixitIdentity(
       };
       return identity;
     } catch (err) {
+      logRequest?.("auth", {
+        outcome: "firebase_verify_failed",
+        authMode: fixitConfig.authMode,
+        token,
+        error: String(err),
+      });
       console.log("[fixit] auth: Firebase token invalid or expired:", String(err));
       sendJson(res, 401, { error: "Invalid or expired token", details: String(err) });
       return null;
@@ -211,6 +243,118 @@ const runIdToAbort = new Map<
   string,
   { controller: AbortController; userId: string; orgId: string }
 >();
+const FIXIT_LOG_MAX_TEXT = 2000;
+const FIXIT_LOG_MAX_ARRAY_ITEMS = 20;
+
+function truncateFixitLogText(value: string, max = FIXIT_LOG_MAX_TEXT): string {
+  return value.length > max ? `${value.slice(0, max).trimEnd()}... [truncated]` : value;
+}
+
+function decodeBase64Url(value: string): string | null {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4);
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function summarizeJwtLikeString(value: string): Record<string, unknown> | null {
+  const token = value.trim();
+  const jwtMatch = token.match(/^(?:Bearer\s+)?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i);
+  if (!jwtMatch) {
+    return null;
+  }
+  const rawToken = jwtMatch[1] ?? "";
+  const payloadSegment = rawToken.split(".")[1] ?? "";
+  const decodedPayload = decodeBase64Url(payloadSegment);
+  let payload: Record<string, unknown> | null = null;
+  if (decodedPayload) {
+    try {
+      payload = JSON.parse(decodedPayload) as Record<string, unknown>;
+    } catch {
+      payload = null;
+    }
+  }
+  const exp = typeof payload?.exp === "number" ? payload.exp : null;
+  const iat = typeof payload?.iat === "number" ? payload.iat : null;
+  return {
+    kind: /^Bearer\s+/i.test(token) ? "bearer_jwt" : "jwt",
+    length: rawToken.length,
+    headerPreview: `${rawToken.slice(0, 12)}...${rawToken.slice(-8)}`,
+    iss: payload?.iss,
+    aud: payload?.aud,
+    sub: payload?.sub,
+    user_id: payload?.user_id,
+    phone_number: payload?.phone_number,
+    iat,
+    iatIso: iat ? new Date(iat * 1000).toISOString() : null,
+    exp,
+    expIso: exp ? new Date(exp * 1000).toISOString() : null,
+    expired: typeof exp === "number" ? exp * 1000 <= Date.now() : null,
+  };
+}
+
+function sanitizeFixitLogValue(value: unknown, depth = 0): unknown {
+  if (value == null) {
+    return value;
+  }
+  if (depth > 4) {
+    return "[max-depth]";
+  }
+  if (typeof value === "string") {
+    const jwtSummary = summarizeJwtLikeString(value);
+    if (jwtSummary) {
+      return { redacted: true, tokenSummary: jwtSummary };
+    }
+    return truncateFixitLogText(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  if (typeof value === "function") {
+    return value.name ? `[function ${value.name}]` : "[function anonymous]";
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, FIXIT_LOG_MAX_ARRAY_ITEMS)
+      .map((entry) => sanitizeFixitLogValue(entry, depth + 1));
+  }
+  if (typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (/authorization|token|secret|password|api[_-]?key|sas|accountkey/i.test(key)) {
+        output[key] = "[redacted]";
+        continue;
+      }
+      if (key === "content") {
+        output[key] = "[omitted]";
+        continue;
+      }
+      output[key] = sanitizeFixitLogValue(entry, depth + 1);
+    }
+    return output;
+  }
+  return "[unsupported]";
+}
+
+function serializeFixitLogValue(value: unknown): string {
+  try {
+    return JSON.stringify(sanitizeFixitLogValue(value));
+  } catch {
+    return '"[unserializable]"';
+  }
+}
 
 function getOrigin(req: IncomingMessage): string | undefined {
   const v = req.headers.origin;
@@ -235,10 +379,120 @@ export async function handleFixitHttpRequest(
     return false;
   }
 
-  console.log(`[fixit] ${req.method} ${pathname} (origin: ${getOrigin(req) ?? "none"})`);
-
   const origin = getOrigin(req);
   const applyCors = () => applyFixitCorsHeaders(res, fixitConfig.corsAllowOrigins, origin);
+  const subPath = pathname.slice(basePath.length).replace(/^\/+/, "") || "";
+  const requestId = randomUUID().slice(0, 8);
+  const startedAt = Date.now();
+  const requestLabel = `${req.method ?? "GET"} ${pathname}`;
+  let responsePreview = "";
+  let capturedBytes = 0;
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+
+  const captureResponseChunk = (chunk: unknown, encoding?: BufferEncoding) => {
+    if (chunk == null || capturedBytes >= FIXIT_LOG_MAX_TEXT) {
+      return;
+    }
+    let text = "";
+    if (typeof chunk === "string") {
+      text = chunk;
+    } else if (Buffer.isBuffer(chunk)) {
+      text = chunk.toString(encoding ?? "utf8");
+    } else if (chunk instanceof Uint8Array) {
+      text = Buffer.from(chunk).toString(encoding ?? "utf8");
+    } else {
+      text = serializeFixitLogValue(chunk);
+    }
+    if (!text) {
+      return;
+    }
+    const remaining = FIXIT_LOG_MAX_TEXT - capturedBytes;
+    responsePreview += text.slice(0, remaining);
+    capturedBytes += Math.min(text.length, remaining);
+  };
+
+  res.write = ((
+    chunk: unknown,
+    encoding?: BufferEncoding | ((error?: Error | null) => void),
+    cb?: (error?: Error | null) => void,
+  ) => {
+    const resolvedEncoding = typeof encoding === "string" ? encoding : undefined;
+    const resolvedCallback = typeof encoding === "function" ? encoding : cb;
+    captureResponseChunk(chunk, resolvedEncoding);
+    return originalWrite(chunk as never, encoding as never, resolvedCallback as never);
+  }) as typeof res.write;
+
+  res.end = ((chunk?: unknown, encoding?: BufferEncoding | (() => void), cb?: () => void) => {
+    const resolvedEncoding = typeof encoding === "string" ? encoding : undefined;
+    const resolvedCallback = typeof encoding === "function" ? encoding : cb;
+    captureResponseChunk(chunk, resolvedEncoding);
+    return originalEnd(chunk as never, encoding as never, resolvedCallback as never);
+  }) as typeof res.end;
+
+  const logRequest = (phase: string, details?: Record<string, unknown>) => {
+    const suffix = details ? ` ${serializeFixitLogValue(details)}` : "";
+    console.log(`[fixit][${requestId}] ${phase}: ${requestLabel}${suffix}`);
+  };
+
+  const logRequestBody = (label: string, body: unknown) => {
+    logRequest(label, { body });
+  };
+
+  const writeFixitSseEventLogged = (event: FixitSseEvent): void => {
+    logRequest("sse", {
+      event: event.type,
+      payload:
+        event.type === "delta"
+          ? { text: event.text }
+          : event.type === "tool_call"
+            ? { name: event.name, status: event.status }
+            : event.type === "done"
+              ? {
+                  sessionId: event.sessionId,
+                  runId: event.runId,
+                  chatTitle: event.chatTitle,
+                  text: event.text,
+                }
+              : { error: event.error },
+    });
+    writeFixitSseEvent(res, event);
+  };
+
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
+    const contentType = String(res.getHeader("content-type") ?? "");
+    const contentLength = String(res.getHeader("content-length") ?? "");
+    const responseDetails =
+      contentType.includes("application/json") ||
+      contentType.includes("text/") ||
+      contentType.includes("event-stream")
+        ? truncateFixitLogText(responsePreview)
+        : contentLength
+          ? `[non-text body omitted; content-length=${contentLength}]`
+          : "[non-text body omitted]";
+    logRequest("end", {
+      statusCode: res.statusCode,
+      durationMs,
+      contentType,
+      response: responseDetails,
+    });
+  });
+
+  logRequest("start", {
+    origin: origin ?? "none",
+    subPath,
+    query: Object.fromEntries(url.searchParams.entries()),
+    headers: {
+      "content-type": req.headers["content-type"],
+      "user-agent": req.headers["user-agent"],
+      authorization: req.headers.authorization ? "[present]" : "[missing]",
+      authorizationScheme:
+        typeof req.headers.authorization === "string"
+          ? (req.headers.authorization.split(/\s+/, 1)[0] ?? "").toLowerCase()
+          : undefined,
+    },
+  });
 
   if (req.method === "OPTIONS") {
     console.log("[fixit] handling CORS preflight");
@@ -248,8 +502,6 @@ export async function handleFixitHttpRequest(
 
   applyCors();
 
-  const subPath = pathname.slice(basePath.length).replace(/^\/+/, "") || "";
-
   // POST /api/fixit/dev/jwt — issue test JWT (no auth; testing only when allowDevJwt is true)
   if (req.method === "POST" && subPath === "dev/jwt" && fixitConfig.allowDevJwt) {
     const bodyResult = await readJsonBody(req, 64 * 1024);
@@ -258,6 +510,7 @@ export async function handleFixitHttpRequest(
       return true;
     }
     const raw = bodyResult.value as Record<string, unknown>;
+    logRequestBody("request", raw);
     const orgId = typeof raw?.orgId === "string" ? raw.orgId.trim() : "";
     const userId = typeof raw?.userId === "string" ? raw.userId.trim() : "";
     const campaignId = typeof raw?.campaignId === "string" ? raw.campaignId.trim() : "";
@@ -373,7 +626,7 @@ export async function handleFixitHttpRequest(
     return true;
   }
 
-  const identity = await resolveFixitIdentity(req, res, fixitConfig);
+  const identity = await resolveFixitIdentity(req, res, fixitConfig, logRequest);
   if (!identity) {
     console.log("[fixit] auth failed — returned 401/403");
     return true;
@@ -409,6 +662,7 @@ export async function handleFixitHttpRequest(
       return true;
     }
     const raw = bodyResult.value;
+    logRequestBody("request", raw);
     const message =
       typeof (raw as FixitChatSendBody)?.message === "string"
         ? (raw as FixitChatSendBody).message.trim()
@@ -513,6 +767,7 @@ export async function handleFixitHttpRequest(
     registerAgentRunContext(runId, { sessionKey });
 
     setSseHeaders(res);
+    logRequest("sse-start", { sessionId: sessionUuid, runId });
 
     let fullText = "";
     let chatTitle = "New chat";
@@ -523,7 +778,7 @@ export async function handleFixitHttpRequest(
       }
       doneSent = true;
       runIdToAbort.delete(runId);
-      writeFixitSseEvent(res, {
+      writeFixitSseEventLogged({
         type: "done",
         text: fullText,
         sessionId: sessionUuid,
@@ -549,7 +804,7 @@ export async function handleFixitHttpRequest(
       if (evt.stream === "assistant") {
         const text = resolveAssistantStreamDeltaText(evt);
         if (text) {
-          writeFixitSseEvent(res, { type: "delta", text });
+          writeFixitSseEventLogged({ type: "delta", text });
         }
         return;
       }
@@ -561,7 +816,7 @@ export async function handleFixitHttpRequest(
             : evt.data?.phase === "error" || evt.data?.status === "failed"
               ? "failed"
               : "running";
-        writeFixitSseEvent(res, { type: "tool_call", name, status });
+        writeFixitSseEventLogged({ type: "tool_call", name, status });
         return;
       }
       if (evt.stream === "lifecycle") {
@@ -612,7 +867,7 @@ export async function handleFixitHttpRequest(
           if (!doneSent) {
             doneSent = true;
             runIdToAbort.delete(runId);
-            writeFixitSseEvent(res, { type: "error", error: String(err) });
+            writeFixitSseEventLogged({ type: "error", error: String(err) });
             res.end();
           }
           return;
@@ -666,6 +921,7 @@ export async function handleFixitHttpRequest(
       bodyResult.ok && typeof bodyResult.value === "object"
         ? (bodyResult.value as FixitChatAbortBody)
         : {};
+    logRequestBody("request", body);
     const runId = typeof body.runId === "string" ? body.runId : undefined;
     if (!runId) {
       sendJson(res, 400, { error: "runId is required" });
@@ -770,6 +1026,12 @@ export async function handleFixitHttpRequest(
   // GET /api/fixit/chat/history?sessionId=...
   if (req.method === "GET" && subPath === "chat/history") {
     const sessionId = url.searchParams.get("sessionId");
+    if (sessionId && /^Bearer\s+/i.test(sessionId)) {
+      logRequest("warning", {
+        reason: "sessionId_looks_like_authorization_header",
+        sessionId,
+      });
+    }
     if (!sessionId) {
       sendJson(res, 400, { error: "sessionId query is required" });
       return true;
