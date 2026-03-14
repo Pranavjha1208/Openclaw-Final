@@ -996,6 +996,11 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
           description:
             "If set, export a random sample of N documents (MongoDB $sample). Use for e.g. '100 random leads'. Omit to export all matching documents.",
         },
+        pipeline: {
+          type: "string",
+          description:
+            'Optional JSON aggregation pipeline to export the exact result set from a joined query. Use this for production filters based on joined data like call status, status_description, lead_status, or call duration. Example: [{"$match":{"org_id":"ORG_xxx"}},{"$lookup":{"from":"f_lead_status","localField":"lead_id","foreignField":"lead_id","as":"statusDoc"}},{"$lookup":{"from":"f_lead_call","localField":"lead_id","foreignField":"lead_id","as":"callDoc"}},{"$addFields":{"statusDoc":{"$arrayElemAt":["$statusDoc",0]},"callDoc":{"$arrayElemAt":["$callDoc",0]}}},{"$match":{"statusDoc.status_description":{"$regex":"call[_ ]?drop","$options":"i"}}}]',
+        },
         exportStyle: {
           type: "string",
           description:
@@ -1017,6 +1022,8 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         typeof params.sampleSize === "number" && params.sampleSize > 0
           ? Math.min(Math.floor(params.sampleSize), 100_000)
           : null;
+      const rawPipeline =
+        typeof params.pipeline === "string" ? JSON.parse(params.pipeline) : params.pipeline;
       const exportStyle =
         typeof params.exportStyle === "string" && params.exportStyle.trim() === "leads_production"
           ? "leads_production"
@@ -1033,51 +1040,93 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
       let productionColumns: string[] = [];
 
       if (useProductionLeads) {
-        // Production leads: d_lead + $lookup d_campaign (campaign_name) and f_lead_status (lead_status, comments, lead_data).
-        const pipeline: Record<string, unknown>[] = [];
-        if (Object.keys(filter).length > 0) {
-          pipeline.push({ $match: filter });
-        }
-        if (sampleSize != null) {
-          pipeline.push({ $sample: { size: sampleSize } });
-        }
-        pipeline.push({ $sort: sortFinal });
-        pipeline.push({
-          $lookup: {
-            from: "d_campaign",
-            let: { cid: "$campaign_id", uid: "$user_id" },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [{ $eq: ["$campaign_id", "$$cid"] }, { $eq: ["$user_id", "$$uid"] }],
+        // Production leads: either export the exact aggregate pipeline results provided by the agent,
+        // or build the default d_lead + joined status/call view.
+        let pipeline: Record<string, unknown>[];
+        if (Array.isArray(rawPipeline)) {
+          pipeline = rawPipeline.map((stage: Record<string, unknown>) => {
+            const match = stage?.$match;
+            if (match !== null && typeof match === "object" && !Array.isArray(match)) {
+              return {
+                ...stage,
+                $match: convertFilterDateStrings(match as Record<string, unknown>),
+              };
+            }
+            return stage;
+          });
+          if (fixitScope && (col === "d_lead" || ORG_SCOPED_COLLECTIONS.has(col))) {
+            pipeline = ensurePipelineScope(pipeline, fixitScope, col) as Record<string, unknown>[];
+          }
+          if (sampleSize != null) {
+            pipeline.push({ $sample: { size: sampleSize } });
+          }
+        } else {
+          pipeline = [];
+          if (Object.keys(filter).length > 0) {
+            pipeline.push({ $match: filter });
+          }
+          if (sampleSize != null) {
+            pipeline.push({ $sample: { size: sampleSize } });
+          }
+          pipeline.push({ $sort: sortFinal });
+          pipeline.push({
+            $lookup: {
+              from: "d_campaign",
+              let: { cid: "$campaign_id", uid: "$user_id" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [{ $eq: ["$campaign_id", "$$cid"] }, { $eq: ["$user_id", "$$uid"] }],
+                    },
                   },
                 },
-              },
-              { $limit: 1 },
-              { $project: { campaign_name: 1, _id: 0 } },
-            ],
-            as: "campaignDoc",
-          },
-        });
-        pipeline.push({
-          $lookup: {
-            from: "f_lead_status",
-            localField: "lead_id",
-            foreignField: "lead_id",
-            as: "statusDoc",
-          },
-        });
-        pipeline.push({
-          $addFields: {
-            campaignDoc: { $arrayElemAt: ["$campaignDoc", 0] },
-            statusDoc: { $arrayElemAt: ["$statusDoc", 0] },
-          },
-        });
+                { $limit: 1 },
+                { $project: { campaign_name: 1, _id: 0 } },
+              ],
+              as: "campaignDoc",
+            },
+          });
+          pipeline.push({
+            $lookup: {
+              from: "f_lead_status",
+              localField: "lead_id",
+              foreignField: "lead_id",
+              as: "statusDoc",
+            },
+          });
+          pipeline.push({
+            $lookup: {
+              from: "f_lead_call",
+              localField: "lead_id",
+              foreignField: "lead_id",
+              as: "callDoc",
+            },
+          });
+          pipeline.push({
+            $addFields: {
+              campaignDoc: { $arrayElemAt: ["$campaignDoc", 0] },
+              statusDoc: { $arrayElemAt: ["$statusDoc", 0] },
+              callDoc: { $arrayElemAt: ["$callDoc", 0] },
+            },
+          });
+        }
         docs = (await db.collection(col).aggregate(pipeline).toArray()) as Record<
           string,
           unknown
         >[];
+
+        function firstJoinedDoc(value: unknown): Record<string, unknown> | undefined {
+          if (Array.isArray(value)) {
+            const first = value[0];
+            return first && typeof first === "object" && !Array.isArray(first)
+              ? (first as Record<string, unknown>)
+              : undefined;
+          }
+          return value && typeof value === "object" && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : undefined;
+        }
 
         const leadDataKeyToCol: Record<string, string> = {
           estimated_annual_income: "Estimated Annual Income",
@@ -1089,7 +1138,10 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         };
         const allLeadDataKeys = new Set<string>(Object.keys(leadDataKeyToCol));
         for (const doc of docs) {
-          const statusDoc = doc.statusDoc as Record<string, unknown> | undefined;
+          const statusDoc =
+            firstJoinedDoc(doc.statusDoc) ??
+            firstJoinedDoc(doc.status) ??
+            (doc as Record<string, unknown>);
           const leadData = statusDoc?.lead_data as Record<string, unknown> | undefined;
           if (leadData && typeof leadData === "object") {
             for (const k of Object.keys(leadData)) {
@@ -1126,7 +1178,12 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
           "Lead Email",
           "Lead Address",
           "Lead Status",
+          "Status Description",
           "Comments",
+          "Call Reachout Status",
+          "Call Attempt Count",
+          "Call Connected Count",
+          "Last Call Duration Seconds",
           ...Array.from(allLeadDataKeys).map(
             (k) =>
               leadDataKeyToCol[k] ??
@@ -1138,8 +1195,12 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
         ];
 
         for (const doc of docs) {
-          const statusDoc = doc.statusDoc as Record<string, unknown> | undefined;
-          const campaignDoc = doc.campaignDoc as { campaign_name?: string } | undefined;
+          const statusDoc =
+            firstJoinedDoc(doc.statusDoc) ?? firstJoinedDoc(doc.status) ?? undefined;
+          const callDoc = firstJoinedDoc(doc.callDoc) ?? firstJoinedDoc(doc.call) ?? undefined;
+          const campaignDoc =
+            (firstJoinedDoc(doc.campaignDoc) as { campaign_name?: string } | undefined) ??
+            (firstJoinedDoc(doc.campaign) as { campaign_name?: string } | undefined);
           const leadData = statusDoc?.lead_data as Record<string, unknown> | undefined;
           const row: Record<string, string> = {
             "Lead Name": strVal(doc.lead_name),
@@ -1149,8 +1210,19 @@ ${CONTEXT_AND_ADVANCED_FILTERS}`,
             "Campaign Name": strVal(campaignDoc?.campaign_name),
             "Lead Email": strVal(doc.lead_email),
             "Lead Address": strVal(doc.lead_address),
-            "Lead Status": strVal(statusDoc?.lead_status),
+            "Lead Status": strVal(statusDoc?.lead_status ?? doc.lead_status),
+            "Status Description": strVal(statusDoc?.status_description ?? doc.status_description),
             Comments: strVal(statusDoc?.comments),
+            "Call Reachout Status": strVal(
+              callDoc?.call_reachout_status ?? doc.call_reachout_status,
+            ),
+            "Call Attempt Count": strVal(callDoc?.call_attempt_count ?? doc.call_attempt_count),
+            "Call Connected Count": strVal(
+              callDoc?.call_connected_count ?? doc.call_connected_count,
+            ),
+            "Last Call Duration Seconds": strVal(
+              callDoc?.last_call_duration_seconds ?? doc.last_call_duration_seconds,
+            ),
           };
           for (const k of allLeadDataKeys) {
             const colName =

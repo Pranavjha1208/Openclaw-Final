@@ -376,21 +376,43 @@ export async function loadSessionHistory(
 ): Promise<HistoryMessage[]> {
   const client = await getClient(mongoUri);
   const db = client.db(mongoDatabase);
+  const sessionKey = String(sessionObjectId);
 
-  const cursor = db
+  console.log(
+    `[fixit] loadSessionHistory: user=${userId} session=${sessionKey} limit=${MAX_SESSION_MESSAGES}`,
+  );
+
+  const rows = await db
     .collection("f_user_messages")
     .find(
       { user_id: userId, session_id: sessionObjectId },
       { projection: { message: 1, message_owner: 1, created_at: 1, _id: 0 } },
     )
-    .toSorted({ created_at: -1 })
-    .limit(MAX_SESSION_MESSAGES);
-  const rows = await cursor.toArray();
+    .limit(MAX_SESSION_MESSAGES)
+    .toArray();
+
+  console.log(
+    `[fixit] loadSessionHistory: fetched ${rows.length} raw messages for user=${userId} session=${sessionKey}`,
+  );
 
   // Reverse so oldest first (chronological order for the agent)
   return rows
     .slice()
-    .toReversed()
+    .toSorted((a, b) => {
+      const aTime =
+        a.created_at instanceof Date
+          ? a.created_at.getTime()
+          : typeof a.created_at === "string"
+            ? new Date(a.created_at).getTime()
+            : 0;
+      const bTime =
+        b.created_at instanceof Date
+          ? b.created_at.getTime()
+          : typeof b.created_at === "string"
+            ? new Date(b.created_at).getTime()
+            : 0;
+      return aTime - bTime;
+    })
     .map((r) => ({
       role: r.message_owner === "assistant" ? ("assistant" as const) : ("user" as const),
       text: truncateMsg((r.message as string) ?? ""),
@@ -415,9 +437,14 @@ export async function loadCrossSessionContext(
 ): Promise<HistoryMessage[]> {
   const client = await getClient(mongoUri);
   const db = client.db(mongoDatabase);
+  const sessionKey = String(currentSessionObjectId);
+
+  console.log(
+    `[fixit] loadCrossSessionContext: user=${userId} session!=${sessionKey} limit=${MAX_CROSS_SESSION_MESSAGES}`,
+  );
 
   // Get the most recent messages from OTHER sessions
-  const cursor = db
+  const rows = await db
     .collection("f_user_messages")
     .find(
       {
@@ -427,13 +454,30 @@ export async function loadCrossSessionContext(
       },
       { projection: { message: 1, message_owner: 1, created_at: 1, _id: 0 } },
     )
-    .toSorted({ created_at: -1 })
-    .limit(MAX_CROSS_SESSION_MESSAGES);
-  const rows = await cursor.toArray();
+    .limit(MAX_CROSS_SESSION_MESSAGES)
+    .toArray();
+
+  console.log(
+    `[fixit] loadCrossSessionContext: fetched ${rows.length} raw messages for user=${userId} excluding session=${sessionKey}`,
+  );
 
   return rows
     .slice()
-    .toReversed()
+    .toSorted((a, b) => {
+      const aTime =
+        a.created_at instanceof Date
+          ? a.created_at.getTime()
+          : typeof a.created_at === "string"
+            ? new Date(a.created_at).getTime()
+            : 0;
+      const bTime =
+        b.created_at instanceof Date
+          ? b.created_at.getTime()
+          : typeof b.created_at === "string"
+            ? new Date(b.created_at).getTime()
+            : 0;
+      return aTime - bTime;
+    })
     .map((r) => ({
       role: r.message_owner === "assistant" ? ("assistant" as const) : ("user" as const),
       text: truncateMsg((r.message as string) ?? ""),

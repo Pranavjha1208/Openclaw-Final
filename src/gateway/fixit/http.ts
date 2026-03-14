@@ -71,6 +71,10 @@ function buildMessagePreview(input: string): string {
   return collapsed.length > 120 ? `${collapsed.slice(0, 117).trimEnd()}...` : collapsed;
 }
 
+function describeFixitScope(identity: FixitIdentity): string {
+  return `org=${identity.orgId} user=${identity.userId}${identity.campaignId ? ` campaign=${identity.campaignId}` : ""}`;
+}
+
 function resolveEffectiveFixitIdentity(
   identity: FixitIdentity,
   bodyCampaignId?: string,
@@ -681,18 +685,21 @@ export async function handleFixitHttpRequest(
   // GET /api/fixit/chat/sessions
   if (req.method === "GET" && subPath === "chat/sessions") {
     try {
+      console.log(`[fixit] chat/sessions: listing for ${describeFixitScope(identity)}`);
       const { getFixitDb } = await import("./mongo-sync.js");
       const db = await getFixitDb(fixitConfig.mongoUri, fixitConfig.mongoDatabase);
-      const cursor = db
+      const sessions = await db
         .collection("f_user_sessions")
         .find({
           user_id: identity.userId,
           channel_type: FIXIT_UI_CHANNEL,
           "metadata.org_id": identity.orgId,
         })
-        .toSorted({ updated_at: -1 })
-        .limit(50);
-      const sessions = await cursor.toArray();
+        .limit(50)
+        .toArray();
+      console.log(
+        `[fixit] chat/sessions: fetched ${sessions.length} raw sessions for ${describeFixitScope(identity)}`,
+      );
       type SessionDoc = {
         _id?: unknown;
         session_id?: string;
@@ -704,39 +711,57 @@ export async function handleFixitHttpRequest(
       };
       type MessagePreviewDoc = { message?: string };
       const enrichedSessions = await Promise.all(
-        (sessions as SessionDoc[]).map(async (s) => {
-          const messageCount = await db.collection("f_user_messages").countDocuments({
-            user_id: identity.userId,
-            session_id: s._id,
-          });
-          const lastMessage = (await db
-            .collection("f_user_messages")
-            .findOne(
-              { user_id: identity.userId, session_id: s._id },
-              { sort: { created_at: -1 }, projection: { message: 1, _id: 0 } },
-            )) as MessagePreviewDoc | null;
-          const savedTitle = s.metadata?.title;
-          const title =
-            typeof savedTitle === "string" && savedTitle.trim()
-              ? savedTitle.trim()
-              : normalizeChatTitle(lastMessage?.message ?? "New chat");
-          return {
-            sessionId: s.session_id,
-            title,
-            startTime: (s.start_time as Date)?.toISOString?.() ?? new Date().toISOString(),
-            endTime: (s.end_time as Date)?.toISOString?.() ?? null,
-            updatedAt: (s.updated_at as Date)?.toISOString?.() ?? new Date().toISOString(),
-            channelType: s.channel_type ?? FIXIT_UI_CHANNEL,
-            messageCount,
-            lastMessagePreview: buildMessagePreview(lastMessage?.message ?? ""),
-            metadata: s.metadata ?? {},
-          };
-        }),
+        (sessions as SessionDoc[])
+          .slice()
+          .toSorted((a, b) => {
+            const aTime =
+              a.updated_at instanceof Date
+                ? a.updated_at.getTime()
+                : a.updated_at
+                  ? new Date(String(a.updated_at)).getTime()
+                  : 0;
+            const bTime =
+              b.updated_at instanceof Date
+                ? b.updated_at.getTime()
+                : b.updated_at
+                  ? new Date(String(b.updated_at)).getTime()
+                  : 0;
+            return bTime - aTime;
+          })
+          .map(async (s) => {
+            const messageCount = await db.collection("f_user_messages").countDocuments({
+              user_id: identity.userId,
+              session_id: s._id,
+            });
+            const lastMessage = (await db
+              .collection("f_user_messages")
+              .findOne(
+                { user_id: identity.userId, session_id: s._id },
+                { sort: { created_at: -1 }, projection: { message: 1, _id: 0 } },
+              )) as MessagePreviewDoc | null;
+            const savedTitle = s.metadata?.title;
+            const title =
+              typeof savedTitle === "string" && savedTitle.trim()
+                ? savedTitle.trim()
+                : normalizeChatTitle(lastMessage?.message ?? "New chat");
+            return {
+              sessionId: s.session_id,
+              title,
+              startTime: (s.start_time as Date)?.toISOString?.() ?? new Date().toISOString(),
+              endTime: (s.end_time as Date)?.toISOString?.() ?? null,
+              updatedAt: (s.updated_at as Date)?.toISOString?.() ?? new Date().toISOString(),
+              channelType: s.channel_type ?? FIXIT_UI_CHANNEL,
+              messageCount,
+              lastMessagePreview: buildMessagePreview(lastMessage?.message ?? ""),
+              metadata: s.metadata ?? {},
+            };
+          }),
       );
       sendJson(res, 200, {
         sessions: enrichedSessions,
       });
     } catch (err) {
+      console.error(`[fixit] chat/sessions: failed for ${describeFixitScope(identity)}:`, err);
       sendJson(res, 500, { error: "Failed to list sessions", details: String(err) });
     }
     return true;
@@ -754,6 +779,9 @@ export async function handleFixitHttpRequest(
       Math.max(1, parseInt(url.searchParams.get("limit") ?? "50", 10) || 50),
     );
     try {
+      console.log(
+        `[fixit] chat/history: loading session=${sessionId} limit=${limit} for ${describeFixitScope(identity)}`,
+      );
       const { getFixitDb } = await import("./mongo-sync.js");
       const db = await getFixitDb(fixitConfig.mongoUri, fixitConfig.mongoDatabase);
       const sessionDoc = (await db.collection("f_user_sessions").findOne({
@@ -763,15 +791,20 @@ export async function handleFixitHttpRequest(
         "metadata.org_id": identity.orgId,
       })) as { _id: unknown; metadata?: Record<string, unknown> } | null;
       if (!sessionDoc) {
+        console.warn(
+          `[fixit] chat/history: session not found session=${sessionId} for ${describeFixitScope(identity)}`,
+        );
         sendJson(res, 200, { messages: [], sessionId });
         return true;
       }
-      const cursor = db
+      const messages = await db
         .collection("f_user_messages")
         .find({ user_id: identity.userId, session_id: sessionDoc._id })
-        .toSorted({ created_at: 1 })
-        .limit(limit);
-      const messages = await cursor.toArray();
+        .limit(limit)
+        .toArray();
+      console.log(
+        `[fixit] chat/history: fetched ${messages.length} raw messages for session=${sessionId} ${describeFixitScope(identity)}`,
+      );
       type MessageDoc = {
         message?: string;
         message_owner?: string;
@@ -780,13 +813,30 @@ export async function handleFixitHttpRequest(
         created_at?: Date;
       };
       sendJson(res, 200, {
-        messages: (messages as MessageDoc[]).map((m) => ({
-          message: m.message,
-          messageOwner: m.message_owner,
-          messageType: m.message_type ?? "text",
-          channelType: m.channel_type ?? FIXIT_UI_CHANNEL,
-          createdAt: (m.created_at as Date)?.toISOString?.() ?? new Date().toISOString(),
-        })),
+        messages: (messages as MessageDoc[])
+          .slice()
+          .toSorted((a, b) => {
+            const aTime =
+              a.created_at instanceof Date
+                ? a.created_at.getTime()
+                : a.created_at
+                  ? new Date(String(a.created_at)).getTime()
+                  : 0;
+            const bTime =
+              b.created_at instanceof Date
+                ? b.created_at.getTime()
+                : b.created_at
+                  ? new Date(String(b.created_at)).getTime()
+                  : 0;
+            return aTime - bTime;
+          })
+          .map((m) => ({
+            message: m.message,
+            messageOwner: m.message_owner,
+            messageType: m.message_type ?? "text",
+            channelType: m.channel_type ?? FIXIT_UI_CHANNEL,
+            createdAt: (m.created_at as Date)?.toISOString?.() ?? new Date().toISOString(),
+          })),
         sessionId,
         title:
           typeof sessionDoc.metadata?.title === "string" && sessionDoc.metadata.title.trim()
@@ -794,6 +844,10 @@ export async function handleFixitHttpRequest(
             : "New chat",
       });
     } catch (err) {
+      console.error(
+        `[fixit] chat/history: failed session=${sessionId} for ${describeFixitScope(identity)}:`,
+        err,
+      );
       sendJson(res, 500, { error: "Failed to get history", details: String(err) });
     }
     return true;

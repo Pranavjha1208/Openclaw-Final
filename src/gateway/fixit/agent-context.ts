@@ -159,6 +159,7 @@ function buildExportRules(): string {
   return `EXCEL/CSV EXPORT RULES:
 - When the user requests lead data and the result would contain MORE THAN 5 rows, you MUST use mongo_export_csv to generate a file instead of listing them in chat.
 - For production-quality leads export (Campaign Name, Lead Status, Comments, enrichment columns): use mongo_export_csv with collection d_lead, exportStyle "leads_production", and filename ending in .xlsx when the user asks for Excel (e.g. all_leads_<org_id>.xlsx). For CSV use the same exportStyle and .csv filename.
+- For joined filters like call_drop, call_reachout_status, status_description, lead_status, or any query that used $lookup on f_lead_status/f_lead_call, you MUST pass the SAME aggregation pipeline to mongo_export_csv via its pipeline parameter so the exported sheet matches the exact filtered result set. Do NOT export broad d_lead rows with an empty or unrelated filter.
 - After exporting, provide the download link returned by the tool. When Azure Blob upload is configured, this will be a signed blob URL.
 - For 5 or fewer rows, show data inline as a markdown table.`;
 }
