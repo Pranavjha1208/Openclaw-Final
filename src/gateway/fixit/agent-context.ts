@@ -134,17 +134,17 @@ function buildConversationMemory(
 ): string {
   const parts: string[] = [];
 
-  if (crossSessionHistory && crossSessionHistory.length > 0) {
-    const lines = crossSessionHistory.map((m) => `[${m.role}] ${m.text}`);
-    parts.push(
-      `PREVIOUS SESSIONS (recent messages from past conversations — use for continuity):\n${lines.join("\n")}`,
-    );
-  }
-
   if (sessionHistory && sessionHistory.length > 0) {
     const lines = sessionHistory.map((m) => `[${m.role}] ${m.text}`);
     parts.push(
-      `CURRENT SESSION HISTORY (${sessionHistory.length} messages — this is the ongoing conversation):\n${lines.join("\n")}`,
+      `CURRENT SESSION HISTORY (${sessionHistory.length} messages — this is the authoritative context for this chat. For follow-ups like "retry this task", "fetch again", "what exact query did you use", or "that result", use this section first):\n${lines.join("\n")}`,
+    );
+  }
+
+  if (crossSessionHistory && crossSessionHistory.length > 0) {
+    const lines = crossSessionHistory.map((m) => `[${m.role}] ${m.text}`);
+    parts.push(
+      `PREVIOUS SESSIONS (recent messages from past conversations — use only for background continuity, and never overrule current-session context):\n${lines.join("\n")}`,
     );
   }
 

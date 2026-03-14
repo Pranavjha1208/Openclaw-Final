@@ -353,7 +353,7 @@ export type HistoryMessage = {
   createdAt: string;
 };
 
-const MAX_SESSION_MESSAGES = 30;
+const MAX_SESSION_MESSAGES = 50;
 const MAX_CROSS_SESSION_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 2000;
 
