@@ -67,8 +67,11 @@ You are serving a Fixit dashboard user. All data access is HARD-SCOPED to this o
 function buildScopingRules(identity: FixitIdentity): string {
   const campaignFilter = identity.campaignId ? ` AND {"campaign_id":"${identity.campaignId}"}` : "";
   const campaignNote = identity.campaignId ? ` Treat campaign_id as a hard filter.` : "";
+  const dCampaignException = identity.campaignId
+    ? `\n- EXCEPTION for d_campaign: when the user asks for "all campaigns", "how many campaigns", "list my campaigns", or "total campaigns", query d_campaign with ONLY {"org_id":"${identity.orgId}"} (do NOT add campaign_id). This returns every campaign in the org; adding campaign_id would incorrectly limit to the currently selected campaign.`
+    : "";
   return `STRICT SCOPING RULES (enforced backend + agent level):
-- You MUST include {"org_id":"${identity.orgId}"} AND {"user_id":"${identity.userId}"}${campaignFilter} in EVERY mongo_find, mongo_count, mongo_aggregate, and mongo_update filter on collections with org_id (e.g. d_lead, d_campaign, f_user_workspace).${campaignNote}
+- You MUST include {"org_id":"${identity.orgId}"} AND {"user_id":"${identity.userId}"}${campaignFilter} in EVERY mongo_find, mongo_count, mongo_aggregate, and mongo_update filter on collections with org_id (e.g. d_lead, d_campaign, f_user_workspace).${campaignNote}${dCampaignException}
 - f_lead_status, f_lead_call, f_lead_whatsapp, d_lead_crm do NOT have org_id — they only have lead_id. For "how many leads are qualified?" or any count/list by lead_status: use mongo_aggregate on d_lead with $match on org_id+user_id${identity.campaignId ? "+campaign_id" : ""}, then $lookup f_lead_status on lead_id, then $match {"status.lead_status":"qualified"} (lowercase: "new", "contacted", "qualified", "converted", "lost"). Do NOT use mongo_count on f_lead_status with org_id.
 - CROSS-ORG/USER ACCESS DENIED: Never query or return data for any other org_id, user_id${identity.campaignId ? ", or campaign_id" : ""}. If the user asks for another org's data, respond: "Access denied — you can only access data for your own organization."
 - "My leads", "my campaigns", "our data" = org_id "${identity.orgId}" + user_id "${identity.userId}"${identity.campaignId ? ` + campaign_id "${identity.campaignId}"` : ""}.
