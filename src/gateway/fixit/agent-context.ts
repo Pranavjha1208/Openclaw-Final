@@ -3,29 +3,37 @@
  * Builds per-user system prompt so the AI auto-scopes all MongoDB queries to org_id/user_id.
  *
  * Injects:
- * 1. Identity + strict scoping rules
- * 2. Workspace profile (single doc) or onboarding instructions
- * 3. Conversation memory (current session + cross-session)
- * 4. Export / formatting rules
+ * 1. (When agentId is fixit-helpdesk) Helpdesk role and Fixit product knowledge
+ * 2. Identity + strict scoping rules
+ * 3. Workspace profile (single doc) or onboarding instructions
+ * 4. Conversation memory (current session + cross-session)
+ * 5. Export / formatting rules
  */
 
 import type { WorkspaceCheckResult, HistoryMessage } from "./mongo-sync.js";
 import { WORKSPACE_PROFILE_DOC_ID } from "./mongo-sync.js";
 import type { FixitIdentity } from "./types.js";
+import { getHelpdeskProductContext } from "./helpdesk-product-context.js";
 
 export type AgentContextInput = {
   identity: FixitIdentity;
   workspace?: WorkspaceCheckResult;
   sessionHistory?: HistoryMessage[];
   crossSessionHistory?: HistoryMessage[];
+  /** When set to "fixit-helpdesk", injects Helpdesk role and Fixit product knowledge. */
+  agentId?: string;
 };
 
 const MAX_CONTEXT_CHARS = 12_000;
 
-export function buildFixitAgentContext(input: AgentContextInput): string {
-  const { identity, workspace, sessionHistory, crossSessionHistory } = input;
+const FIXIT_HELPDESK_AGENT_ID = "fixit-helpdesk";
 
+export function buildFixitAgentContext(input: AgentContextInput): string {
+  const { identity, workspace, sessionHistory, crossSessionHistory, agentId } = input;
+
+  const isHelpdesk = agentId?.trim()?.toLowerCase() === FIXIT_HELPDESK_AGENT_ID;
   const sections: string[] = [
+    ...(isHelpdesk ? [buildHelpdeskSection()] : []),
     buildIdentitySection(identity),
     buildScopingRules(identity),
     buildWorkspaceSection(identity, workspace),
@@ -38,6 +46,7 @@ export function buildFixitAgentContext(input: AgentContextInput): string {
 
   if (prompt.length > MAX_CONTEXT_CHARS) {
     const trimmedSections = [
+      ...(isHelpdesk ? [buildHelpdeskSection()] : []),
       buildIdentitySection(identity),
       buildScopingRules(identity),
       buildWorkspaceSection(identity, workspace),
@@ -49,6 +58,15 @@ export function buildFixitAgentContext(input: AgentContextInput): string {
   }
 
   return prompt.trim();
+}
+
+/**
+ * Fixit Helpdesk agent: product how-to and support only. No database/status queries.
+ * Product context from helpdesk-product-context.ts (derived from fixit-whatsapp-agent).
+ * Injected only when agentId is "fixit-helpdesk".
+ */
+function buildHelpdeskSection(): string {
+  return getHelpdeskProductContext();
 }
 
 function buildIdentitySection(identity: FixitIdentity): string {
@@ -177,7 +195,18 @@ function buildFormattingRules(): string {
 - For file downloads, use the markdown link format above.
 - When the user asks "what query did you use?", explain the query in plain English first: which base collection you searched, which collections were joined, and which REAL schema fields were filtered.
 - If you must show an aggregation pipeline, use only simple temporary join aliases like status, call, whatsapp, and crm. Do NOT invent aliases like status_data, call_data, or whatsapp_data.
-- Never present a $lookup alias as if it were a real MongoDB field. Make it clear that it is only a temporary name inside that one aggregation pipeline.`;
+- Never present a $lookup alias as if it were a real MongoDB field. Make it clear that it is only a temporary name inside that one aggregation pipeline.
+
+CHART/GRAPH REQUESTS:
+When the user asks for a chart, graph, or visualization of data (e.g. "show as a bar chart", "graph leads by status"):
+1. Write a short explanation in normal markdown.
+2. Output exactly one fenced code block with language \`chart-json\` containing a JSON spec. No other text inside the block.
+3. Spec format: { "type": "bar" | "line" | "pie", "title": "optional string", "data": { "labels": ["Label1", "Label2", ...], "datasets": [{ "label": "Series name", "data": [n1, n2, ...] }] } }
+4. For pie charts use a single dataset; the first dataset's \`data\` and \`labels\` (or data.labels) define the segments.
+Example bar chart:
+\`\`\`chart-json
+{"type":"bar","title":"Leads by status","data":{"labels":["New","Contacted","Qualified","Lost"],"datasets":[{"label":"Count","data":[12,28,9,5]}]}}
+\`\`\``;
 }
 
 // -- Helpers --

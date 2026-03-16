@@ -33,7 +33,7 @@ import {
   getOrgIdForUser,
   type GetOrCreateFixitSessionResult,
 } from "./mongo-sync.js";
-import { buildFixitSessionKeyForIdentity } from "./session.js";
+import { buildFixitSessionKeyForIdentity, resolveFixitAgent } from "./session.js";
 import type { FixitIdentity } from "./types.js";
 import type {
   FixitChannelType,
@@ -849,6 +849,7 @@ export async function handleFixitHttpRequest(
                 workspace: agentCtxData?.workspace,
                 sessionHistory: agentCtxData?.sessionHistory,
                 crossSessionHistory: agentCtxData?.crossSessionHistory,
+                agentId: resolveFixitAgent(fixitConfig, effectiveIdentity.orgId),
               }),
             },
             cfg,
