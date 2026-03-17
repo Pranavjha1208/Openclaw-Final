@@ -1,4 +1,4 @@
-import { html, svg, nothing } from "lit";
+import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
@@ -9,14 +9,14 @@ import {
   TimeSeriesPoint,
   UsageSessionEntry,
 } from "./usageTypes.ts";
+import {
+  buildQuickChartImageUrl,
+  QUICKCHART_USAGE_COLORS,
+} from "./quickchart-url.ts";
 
-// Chart constants
-const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
-const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
-const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
-const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
-const HANDLE_HEIGHT = 12; // Height of drag handle
-const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
+/** Used by unit tests (bar layout math). */
+const CHART_BAR_WIDTH_RATIO = 0.75;
+const CHART_MAX_BAR_WIDTH = 8;
 
 function pct(part: number, total: number): number {
   if (!total || total <= 0) {
@@ -332,9 +332,9 @@ function renderTimeSeriesCompact(
   startDate?: string,
   endDate?: string,
   selectedDays?: string[],
-  cursorStart?: number | null,
-  cursorEnd?: number | null,
-  onCursorRangeChange?: (start: number | null, end: number | null) => void,
+  _cursorStart?: number | null,
+  _cursorEnd?: number | null,
+  _onCursorRangeChange?: (start: number | null, end: number | null) => void,
 ) {
   if (loading) {
     return html`
@@ -351,7 +351,6 @@ function renderTimeSeriesCompact(
     `;
   }
 
-  // Filter and recalculate (same logic as main function)
   let points = timeSeries.points;
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
     const startTs = startDate ? new Date(startDate + "T00:00:00").getTime() : 0;
@@ -391,78 +390,121 @@ function renderTimeSeriesCompact(
     return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
   });
 
-  // Compute range-filtered sums for "Tokens by Type"
-  const hasSelection = cursorStart != null && cursorEnd != null;
-  const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
-  const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
-
-  // Find start/end indices for dimming
-  let rangeStartIdx = 0;
-  let rangeEndIdx = points.length;
-  if (hasSelection) {
-    rangeStartIdx = points.findIndex((p) => p.timestamp >= rangeStartTs);
-    if (rangeStartIdx === -1) {
-      rangeStartIdx = points.length;
-    }
-    const endIdx = points.findIndex((p) => p.timestamp > rangeEndTs);
-    rangeEndIdx = endIdx === -1 ? points.length : endIdx;
-  }
-
-  const filteredPoints = hasSelection ? points.slice(rangeStartIdx, rangeEndIdx) : points;
-  let filteredOutput = 0,
-    filteredInput = 0,
-    filteredCacheRead = 0,
-    filteredCacheWrite = 0;
-  for (const p of filteredPoints) {
-    filteredOutput += p.output;
-    filteredInput += p.input;
-    filteredCacheRead += p.cacheRead;
-    filteredCacheWrite += p.cacheWrite;
-  }
-
-  const width = 400,
-    height = 100;
-  const padding = { top: 8, right: 4, bottom: 14, left: 30 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
   const isCumulative = mode === "cumulative";
   const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
-
-  const totalTypeTokens = filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite;
-  const barTotals = points.map((p) =>
-    isCumulative
-      ? p.cumulativeTokens
-      : breakdownByType
-        ? p.input + p.output + p.cacheRead + p.cacheWrite
-        : p.totalTokens,
+  const totalTypeTokens = sumOutput + sumInput + sumCacheRead + sumCacheWrite;
+  const labels = points.map((p, i) =>
+    points.length > 40
+      ? `${i + 1}`
+      : new Date(p.timestamp).toLocaleTimeString(undefined, {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
   );
-  const maxValue = Math.max(...barTotals, 1);
-  // Ensure bars + gaps fit exactly within chartWidth
-  const slotWidth = chartWidth / points.length; // space per bar including gap
-  const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
-  const barGap = slotWidth - barWidth;
+  const title = "Usage Over Time";
 
-  // Pre-compute handle X positions in SVG viewBox coordinates
-  const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
-  const rightHandleX =
-    rangeEndIdx >= points.length
-      ? padding.left + (points.length - 1) * (barWidth + barGap) + barWidth // right edge of last bar
-      : padding.left + (rangeEndIdx - 1) * (barWidth + barGap) + barWidth; // right edge of last selected bar
+  let chart: Record<string, unknown>;
+  if (isCumulative) {
+    chart = {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Cumulative tokens",
+            data: points.map((p) => p.cumulativeTokens),
+            borderColor: QUICKCHART_USAGE_COLORS.total,
+            backgroundColor: "rgba(100, 149, 237, 0.15)",
+            fill: true,
+            tension: 0.1,
+          },
+        ],
+      },
+      options: {
+        plugins: { title: { display: true, text: `${title} (cumulative)` } },
+        scales: { y: { beginAtZero: true } },
+      },
+    };
+  } else if (breakdownByType) {
+    chart = {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Output",
+            data: points.map((p) => p.output),
+            backgroundColor: QUICKCHART_USAGE_COLORS.output,
+          },
+          {
+            label: "Input",
+            data: points.map((p) => p.input),
+            backgroundColor: QUICKCHART_USAGE_COLORS.input,
+          },
+          {
+            label: "Cache write",
+            data: points.map((p) => p.cacheWrite),
+            backgroundColor: QUICKCHART_USAGE_COLORS.cacheWrite,
+          },
+          {
+            label: "Cache read",
+            data: points.map((p) => p.cacheRead),
+            backgroundColor: QUICKCHART_USAGE_COLORS.cacheRead,
+          },
+        ],
+      },
+      options: {
+        plugins: { title: { display: true, text: `${title} (per turn, by type)` } },
+        scales: {
+          x: { stacked: true },
+          y: { stacked: true, beginAtZero: true },
+        },
+      },
+    };
+  } else {
+    chart = {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Tokens / turn",
+            data: points.map((p) => p.totalTokens),
+            backgroundColor: QUICKCHART_USAGE_COLORS.total,
+          },
+        ],
+      },
+      options: {
+        plugins: {
+          title: { display: true, text: `${title} (per turn)` },
+          legend: { display: false },
+        },
+        scales: { y: { beginAtZero: true } },
+      },
+    };
+  }
+
+  const chartUrl = buildQuickChartImageUrl(chart, {
+    width: Math.min(920, 480 + Math.min(points.length, 80) * 6),
+    height: 300,
+    devicePixelRatio: 2,
+    version: "4",
+    backgroundColor: "transparent",
+  });
+
+  const copyChartLink = async () => {
+    try {
+      await navigator.clipboard.writeText(chartUrl);
+    } catch {
+      /* ignore */
+    }
+  };
 
   return html`
     <div class="session-timeseries-compact">
       <div class="timeseries-header-row">
         <div class="card-title" style="font-size: 12px; color: var(--text);">Usage Over Time</div>
         <div class="timeseries-controls">
-          ${
-            hasSelection
-              ? html`
-            <div class="chart-toggle small">
-              <button class="toggle-btn active" @click=${() => onCursorRangeChange?.(null, null)}>Reset</button>
-            </div>
-          `
-              : nothing
-          }
           <div class="chart-toggle small">
             <button
               class="toggle-btn ${!isCumulative ? "active" : ""}"
@@ -499,211 +541,63 @@ function renderTimeSeriesCompact(
           }
         </div>
       </div>
-      <div class="timeseries-chart-wrapper" style="position: relative; cursor: crosshair;">
-        <svg 
-          viewBox="0 0 ${width} ${height + 18}" 
-          class="timeseries-svg" 
-          style="width: 100%; height: auto; display: block;"
-        >
-          <!-- Y axis -->
-          <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${padding.top + chartHeight}" stroke="var(--border)" />
-          <!-- X axis -->
-          <line x1="${padding.left}" y1="${padding.top + chartHeight}" x2="${width - padding.right}" y2="${padding.top + chartHeight}" stroke="var(--border)" />
-          <!-- Y axis labels -->
-          <text x="${padding.left - 4}" y="${padding.top + 5}" text-anchor="end" class="ts-axis-label">${formatTokens(maxValue)}</text>
-          <text x="${padding.left - 4}" y="${padding.top + chartHeight}" text-anchor="end" class="ts-axis-label">0</text>
-          <!-- X axis labels (first and last) -->
-          ${
-            points.length > 0
-              ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${new Date(points[0].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${new Date(points[points.length - 1].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
-          `
-              : nothing
-          }
-          <!-- Bars -->
-          ${points.map((p, i) => {
-            const val = barTotals[i];
-            const x = padding.left + i * (barWidth + barGap);
-            const bh = (val / maxValue) * chartHeight;
-            const y = padding.top + chartHeight - bh;
-            const date = new Date(p.timestamp);
-            const tooltipLines = [
-              date.toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
-              `${formatTokens(val)} tokens`,
-            ];
-            if (breakdownByType) {
-              tooltipLines.push(`Out ${formatTokens(p.output)}`);
-              tooltipLines.push(`In ${formatTokens(p.input)}`);
-              tooltipLines.push(`CW ${formatTokens(p.cacheWrite)}`);
-              tooltipLines.push(`CR ${formatTokens(p.cacheRead)}`);
-            }
-            const tooltip = tooltipLines.join(" · ");
-            const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
-
-            if (!breakdownByType) {
-              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1"><title>${tooltip}</title></rect>`;
-            }
-            const segments = [
-              { value: p.output, cls: "output" },
-              { value: p.input, cls: "input" },
-              { value: p.cacheWrite, cls: "cache-write" },
-              { value: p.cacheRead, cls: "cache-read" },
-            ];
-            let yC = padding.top + chartHeight;
-            const dim = isOutside ? " dimmed" : "";
-            return svg`
-              ${segments.map((seg) => {
-                if (seg.value <= 0 || val <= 0) {
-                  return nothing;
-                }
-                const sh = bh * (seg.value / val);
-                yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${seg.cls}${dim}" rx="1"><title>${tooltip}</title></rect>`;
-              })}
-            `;
-          })}
-          <!-- Selection highlight overlay (always visible between handles) -->
-          ${svg`
-            <rect 
-              x="${leftHandleX}" 
-              y="${padding.top}" 
-              width="${Math.max(1, rightHandleX - leftHandleX)}" 
-              height="${chartHeight}" 
-              fill="var(--accent)" 
-              opacity="${CHART_SELECTION_OPACITY}" 
-              pointer-events="none"
-            />
-          `}
-          <!-- Left cursor line + handle -->
-          ${svg`
-            <line x1="${leftHandleX}" y1="${padding.top}" x2="${leftHandleX}" y2="${padding.top + chartHeight}" stroke="var(--accent)" stroke-width="0.8" opacity="0.7" />
-            <rect x="${leftHandleX - HANDLE_WIDTH / 2}" y="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 2}" width="${HANDLE_WIDTH}" height="${HANDLE_HEIGHT}" rx="1.5" fill="var(--accent)" class="cursor-handle" />
-            <line x1="${leftHandleX - HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${leftHandleX - HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-            <line x1="${leftHandleX + HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${leftHandleX + HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-          `}
-          <!-- Right cursor line + handle -->
-          ${svg`
-            <line x1="${rightHandleX}" y1="${padding.top}" x2="${rightHandleX}" y2="${padding.top + chartHeight}" stroke="var(--accent)" stroke-width="0.8" opacity="0.7" />
-            <rect x="${rightHandleX - HANDLE_WIDTH / 2}" y="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 2}" width="${HANDLE_WIDTH}" height="${HANDLE_HEIGHT}" rx="1.5" fill="var(--accent)" class="cursor-handle" />
-            <line x1="${rightHandleX - HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${rightHandleX - HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-            <line x1="${rightHandleX + HANDLE_GRIP_OFFSET}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${rightHandleX + HANDLE_GRIP_OFFSET}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />
-          `}
-        </svg>
-        <!-- Handle drag zones (only on handles, not full chart) -->
-        ${(() => {
-          const leftHandlePos = `${((leftHandleX / width) * 100).toFixed(1)}%`;
-          const rightHandlePos = `${((rightHandleX / width) * 100).toFixed(1)}%`;
-
-          const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-            if (!onCursorRangeChange) {
-              return;
-            }
-            e.preventDefault();
-            e.stopPropagation();
-            // Find the wrapper, then the SVG inside it
-            const wrapper = (e.currentTarget as HTMLElement).closest(".timeseries-chart-wrapper");
-            const svgEl = wrapper?.querySelector("svg") as SVGSVGElement;
-            if (!svgEl) {
-              return;
-            }
-            // Capture rect once at mousedown to avoid re-render offset shifts
-            const rect = svgEl.getBoundingClientRect();
-            const svgWidth = rect.width;
-            const chartLeftPx = (padding.left / width) * svgWidth;
-            const chartRightPx = ((width - padding.right) / width) * svgWidth;
-            const chartW = chartRightPx - chartLeftPx;
-
-            const posToIdx = (clientX: number) => {
-              const x = Math.max(0, Math.min(1, (clientX - rect.left - chartLeftPx) / chartW));
-              return Math.min(Math.floor(x * points.length), points.length - 1);
-            };
-
-            // Compute click offset: where on the handle the user grabbed
-            const handleSvgX = side === "left" ? leftHandleX : rightHandleX;
-            const handleClientX = rect.left + (handleSvgX / width) * svgWidth;
-            const grabOffset = e.clientX - handleClientX;
-
-            document.body.style.cursor = "col-resize";
-
-            const handleMove = (me: MouseEvent) => {
-              const adjustedX = me.clientX - grabOffset;
-              const idx = posToIdx(adjustedX);
-              const pt = points[idx];
-              if (!pt) {
-                return;
-              }
-              if (side === "left") {
-                const endTs = cursorEnd ?? points[points.length - 1].timestamp;
-                // Don't let left go past right
-                onCursorRangeChange(Math.min(pt.timestamp, endTs), endTs);
-              } else {
-                const startTs = cursorStart ?? points[0].timestamp;
-                // Don't let right go past left
-                onCursorRangeChange(startTs, Math.max(pt.timestamp, startTs));
-              }
-            };
-
-            const handleUp = () => {
-              document.body.style.cursor = "";
-              document.removeEventListener("mousemove", handleMove);
-              document.removeEventListener("mouseup", handleUp);
-            };
-
-            document.addEventListener("mousemove", handleMove);
-            document.addEventListener("mouseup", handleUp);
-          };
-
-          return html`
-            <div class="chart-handle-zone chart-handle-left" 
-                 style="left: ${leftHandlePos};"
-                 @mousedown=${makeDragHandler("left")}></div>
-            <div class="chart-handle-zone chart-handle-right" 
-                 style="left: ${rightHandlePos};"
-                 @mousedown=${makeDragHandler("right")}></div>
-          `;
-        })()}
+      <div class="timeseries-chart-wrapper" style="padding: 8px 0;">
+        <img
+          src=${chartUrl}
+          alt=${title}
+          style="max-width: 100%; height: auto; display: block; border-radius: 6px;"
+          crossorigin="anonymous"
+        />
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px;">
+          <button
+            type="button"
+            class="btn btn-sm usage-action-btn usage-secondary-btn"
+            title="Copy QuickChart URL"
+            @click=${() => void copyChartLink()}
+          >
+            Copy chart link
+          </button>
+          <a
+            href=${chartUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-sm usage-action-btn usage-secondary-btn"
+            style="text-decoration: none;"
+            >Open chart image</a
+          >
+          <span class="muted" style="font-size: 11px;">
+            <a href="https://quickchart.io/documentation/" target="_blank" rel="noopener noreferrer">QuickChart</a>
+          </span>
+        </div>
       </div>
       <div class="timeseries-summary">
-        ${
-          hasSelection
-            ? html`
-              <span style="color: var(--accent);">▶ Turns ${rangeStartIdx + 1}–${rangeEndIdx} of ${points.length}</span> · 
-              ${new Date(rangeStartTs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}–${new Date(rangeEndTs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · 
-              ${formatTokens(filteredOutput + filteredInput + filteredCacheRead + filteredCacheWrite)} · 
-              ${formatCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
-            `
-            : html`${points.length} msgs · ${formatTokens(cumTokens)} · ${formatCost(cumCost)}`
-        }
+        ${points.length} msgs · ${formatTokens(cumTokens)} · ${formatCost(cumCost)}
       </div>
       ${
         breakdownByType
           ? html`
               <div style="margin-top: 8px;">
-                <div class="card-title" style="font-size: 12px; margin-bottom: 6px; color: var(--text);">Tokens by Type</div>
+                <div class="card-title" style="font-size: 12px; margin-bottom: 6px; color: var(--text);">
+                  Tokens by Type
+                </div>
                 <div class="cost-breakdown-bar" style="height: 18px;">
-                  <div class="cost-segment output" style="width: ${pct(filteredOutput, totalTypeTokens).toFixed(1)}%"></div>
-                  <div class="cost-segment input" style="width: ${pct(filteredInput, totalTypeTokens).toFixed(1)}%"></div>
-                  <div class="cost-segment cache-write" style="width: ${pct(filteredCacheWrite, totalTypeTokens).toFixed(1)}%"></div>
-                  <div class="cost-segment cache-read" style="width: ${pct(filteredCacheRead, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment output" style="width: ${pct(sumOutput, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment input" style="width: ${pct(sumInput, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment cache-write" style="width: ${pct(sumCacheWrite, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment cache-read" style="width: ${pct(sumCacheRead, totalTypeTokens).toFixed(1)}%"></div>
                 </div>
                 <div class="cost-breakdown-legend">
                   <div class="legend-item" title="Assistant output tokens">
-                    <span class="legend-dot output"></span>Output ${formatTokens(filteredOutput)}
+                    <span class="legend-dot output"></span>Output ${formatTokens(sumOutput)}
                   </div>
                   <div class="legend-item" title="User + tool input tokens">
-                    <span class="legend-dot input"></span>Input ${formatTokens(filteredInput)}
+                    <span class="legend-dot input"></span>Input ${formatTokens(sumInput)}
                   </div>
                   <div class="legend-item" title="Tokens written to cache">
-                    <span class="legend-dot cache-write"></span>Cache Write ${formatTokens(filteredCacheWrite)}
+                    <span class="legend-dot cache-write"></span>Cache Write ${formatTokens(sumCacheWrite)}
                   </div>
                   <div class="legend-item" title="Tokens read from cache">
-                    <span class="legend-dot cache-read"></span>Cache Read ${formatTokens(filteredCacheRead)}
+                    <span class="legend-dot cache-read"></span>Cache Read ${formatTokens(sumCacheRead)}
                   </div>
                 </div>
                 <div class="cost-breakdown-total">Total: ${formatTokens(totalTypeTokens)}</div>

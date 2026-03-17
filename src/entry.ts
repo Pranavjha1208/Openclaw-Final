@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import dns from "node:dns";
 import process from "node:process";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
@@ -7,6 +8,20 @@ import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+
+dns.setDefaultResultOrder("ipv4first");
+
+// MSYS2 / Git Bash on Windows often exposes 127.0.0.1 as the sole DNS server (a local stub
+// that may not support SRV queries).  mongodb+srv:// needs SRV lookups via dns.resolveSrv(),
+// which uses c-ares talking to whatever dns.getServers() returns.  When that stub refuses SRV
+// queries we get "querySrv ECONNREFUSED".  Fall back to well-known public resolvers.
+{
+  const current = dns.getServers();
+  const isLoopbackOnly = current.length > 0 && current.every((s: string) => /^127\.|^::1$/.test(s));
+  if (isLoopbackOnly) {
+    dns.setServers(["8.8.8.8", "8.8.4.4", "1.1.1.1"]);
+  }
+}
 
 process.title = "openclaw";
 installProcessWarningFilter();

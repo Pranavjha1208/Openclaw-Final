@@ -15,6 +15,7 @@ async function getClient(uri: string): Promise<MongoClient> {
     return cachedClient;
   }
   const client = new MongoClient(uri, {
+    family: 4,
     serverSelectionTimeoutMS: 30_000,
     connectTimeoutMS: 30_000,
   });

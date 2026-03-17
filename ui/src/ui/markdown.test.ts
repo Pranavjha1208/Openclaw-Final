@@ -48,4 +48,18 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("src=");
   });
+
+  it("replaces chart-json fenced block with QuickChart image", () => {
+    const markdown = [
+      "Here is a breakdown:",
+      "```chart-json",
+      '{"type":"pie","title":"Leads by Status","data":{"labels":["New","Contacted"],"datasets":[{"label":"Count","data":[14,1]}]}}',
+      "```",
+    ].join("\n");
+    const html = toSanitizedMarkdownHtml(markdown);
+    expect(html).toContain("<img");
+    expect(html).toContain("quickchart.io");
+    expect(html).toContain("Leads by Status");
+    expect(html).not.toContain("```chart-json");
+  });
 });

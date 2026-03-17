@@ -14,6 +14,10 @@ import {
   UsageTotals,
   CostDailyEntry,
 } from "./usageTypes.ts";
+import {
+  buildQuickChartImageUrl,
+  QUICKCHART_USAGE_COLORS,
+} from "./quickchart-url.ts";
 
 function pct(part: number, total: number): number {
   if (total === 0) {
@@ -148,12 +152,124 @@ function renderDailyChartCompact(
   }
 
   const isTokenMode = chartMode === "tokens";
-  const values = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
-  const maxValue = Math.max(...values, isTokenMode ? 1 : 0.0001);
+  const labels = daily.map((d) =>
+    daily.length > 24 ? String(parseInt(d.date.slice(8), 10)) : formatDayLabel(d.date),
+  );
+  const title = `Daily ${isTokenMode ? "Token" : "Cost"} Usage`;
+  let chart: Record<string, unknown>;
+  if (dailyChartMode === "total") {
+    const data = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
+    chart = {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: isTokenMode ? "Tokens" : "Cost",
+            data,
+            backgroundColor: QUICKCHART_USAGE_COLORS.total,
+          },
+        ],
+      },
+      options: {
+        plugins: {
+          title: { display: true, text: title },
+          legend: { display: false },
+        },
+        scales: {
+          y: { beginAtZero: true },
+        },
+      },
+    };
+  } else if (isTokenMode) {
+    chart = {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Output",
+            data: daily.map((d) => d.output),
+            backgroundColor: QUICKCHART_USAGE_COLORS.output,
+          },
+          {
+            label: "Input",
+            data: daily.map((d) => d.input),
+            backgroundColor: QUICKCHART_USAGE_COLORS.input,
+          },
+          {
+            label: "Cache write",
+            data: daily.map((d) => d.cacheWrite),
+            backgroundColor: QUICKCHART_USAGE_COLORS.cacheWrite,
+          },
+          {
+            label: "Cache read",
+            data: daily.map((d) => d.cacheRead),
+            backgroundColor: QUICKCHART_USAGE_COLORS.cacheRead,
+          },
+        ],
+      },
+      options: {
+        plugins: { title: { display: true, text: `${title} (by type)` } },
+        scales: {
+          x: { stacked: true },
+          y: { stacked: true, beginAtZero: true },
+        },
+      },
+    };
+  } else {
+    chart = {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Output",
+            data: daily.map((d) => d.outputCost ?? 0),
+            backgroundColor: QUICKCHART_USAGE_COLORS.output,
+          },
+          {
+            label: "Input",
+            data: daily.map((d) => d.inputCost ?? 0),
+            backgroundColor: QUICKCHART_USAGE_COLORS.input,
+          },
+          {
+            label: "Cache write",
+            data: daily.map((d) => d.cacheWriteCost ?? 0),
+            backgroundColor: QUICKCHART_USAGE_COLORS.cacheWrite,
+          },
+          {
+            label: "Cache read",
+            data: daily.map((d) => d.cacheReadCost ?? 0),
+            backgroundColor: QUICKCHART_USAGE_COLORS.cacheRead,
+          },
+        ],
+      },
+      options: {
+        plugins: { title: { display: true, text: `${title} (by type)` } },
+        scales: {
+          x: { stacked: true },
+          y: { stacked: true, beginAtZero: true },
+        },
+      },
+    };
+  }
 
-  // Calculate bar width based on number of days
-  const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
-  const showTotals = daily.length <= 14;
+  const chartUrl = buildQuickChartImageUrl(chart, {
+    width: Math.min(900, 420 + daily.length * 12),
+    height: 320,
+    devicePixelRatio: 2,
+    version: "4",
+    backgroundColor: "transparent",
+  });
+
+  const copyChartLink = async () => {
+    try {
+      await navigator.clipboard.writeText(chartUrl);
+    } catch {
+      /* ignore */
+    }
+  };
 
   return html`
     <div class="daily-chart-compact">
@@ -172,93 +288,48 @@ function renderDailyChartCompact(
             By Type
           </button>
         </div>
-        <div class="card-title">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
+        <div class="card-title">${title}</div>
       </div>
-      <div class="daily-chart">
-        <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
-          ${daily.map((d, idx) => {
-            const value = values[idx];
-            const heightPct = (value / maxValue) * 100;
+      <div class="daily-chart quickchart-wrap" style="padding: 8px 0;">
+        <img
+          src=${chartUrl}
+          alt=${title}
+          style="max-width: 100%; height: auto; display: block; border-radius: 6px;"
+          crossorigin="anonymous"
+        />
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px;">
+          <button
+            type="button"
+            class="btn btn-sm usage-action-btn usage-secondary-btn"
+            title="Copy QuickChart URL"
+            @click=${() => void copyChartLink()}
+          >
+            Copy chart link
+          </button>
+          <a
+            href=${chartUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-sm usage-action-btn usage-secondary-btn"
+            style="text-decoration: none;"
+            >Open chart image</a
+          >
+          <span class="muted" style="font-size: 11px;">Powered by <a href="https://quickchart.io/documentation/" target="_blank" rel="noopener noreferrer">QuickChart</a></span>
+        </div>
+        <div class="sessions-panel-title" style="margin-top: 14px; font-size: 11px;">Filter by day</div>
+        <div class="daily-day-pills" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+          ${daily.map((d) => {
             const isSelected = selectedDays.includes(d.date);
-            const label = formatDayLabel(d.date);
-            // Shorter label for many days (just day number)
-            const shortLabel = daily.length > 20 ? String(parseInt(d.date.slice(8), 10)) : label;
-            const labelStyle = daily.length > 20 ? "font-size: 8px" : "";
-            const segments =
-              dailyChartMode === "by-type"
-                ? isTokenMode
-                  ? [
-                      { value: d.output, class: "output" },
-                      { value: d.input, class: "input" },
-                      { value: d.cacheWrite, class: "cache-write" },
-                      { value: d.cacheRead, class: "cache-read" },
-                    ]
-                  : [
-                      { value: d.outputCost ?? 0, class: "output" },
-                      { value: d.inputCost ?? 0, class: "input" },
-                      { value: d.cacheWriteCost ?? 0, class: "cache-write" },
-                      { value: d.cacheReadCost ?? 0, class: "cache-read" },
-                    ]
-                : [];
-            const breakdownLines =
-              dailyChartMode === "by-type"
-                ? isTokenMode
-                  ? [
-                      `Output ${formatTokens(d.output)}`,
-                      `Input ${formatTokens(d.input)}`,
-                      `Cache write ${formatTokens(d.cacheWrite)}`,
-                      `Cache read ${formatTokens(d.cacheRead)}`,
-                    ]
-                  : [
-                      `Output ${formatCost(d.outputCost ?? 0)}`,
-                      `Input ${formatCost(d.inputCost ?? 0)}`,
-                      `Cache write ${formatCost(d.cacheWriteCost ?? 0)}`,
-                      `Cache read ${formatCost(d.cacheReadCost ?? 0)}`,
-                    ]
-                : [];
-            const totalLabel = isTokenMode ? formatTokens(d.totalTokens) : formatCost(d.totalCost);
             return html`
-              <div
-                class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
+              <button
+                type="button"
+                class="btn btn-sm ${isSelected ? "sessions-action-btn" : "usage-secondary-btn"}"
+                style="font-size: 11px; padding: 4px 8px;"
+                title=${formatFullDate(d.date)}
                 @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
               >
-                ${
-                  dailyChartMode === "by-type"
-                    ? html`
-                        <div
-                          class="daily-bar"
-                          style="height: ${heightPct.toFixed(1)}%; display: flex; flex-direction: column;"
-                        >
-                          ${(() => {
-                            const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
-                            return segments.map(
-                              (seg) => html`
-                                <div
-                                  class="cost-segment ${seg.class}"
-                                  style="height: ${(seg.value / total) * 100}%"
-                                ></div>
-                              `,
-                            );
-                          })()}
-                        </div>
-                      `
-                    : html`
-                        <div class="daily-bar" style="height: ${heightPct.toFixed(1)}%"></div>
-                      `
-                }
-                ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
-                <div class="daily-bar-label" style="${labelStyle}">${shortLabel}</div>
-                <div class="daily-bar-tooltip">
-                  <strong>${formatFullDate(d.date)}</strong><br />
-                  ${formatTokens(d.totalTokens)} tokens<br />
-                  ${formatCost(d.totalCost)}
-                  ${
-                    breakdownLines.length
-                      ? html`${breakdownLines.map((line) => html`<div>${line}</div>`)}`
-                      : nothing
-                  }
-                </div>
-              </div>
+                ${formatDayLabel(d.date)}
+              </button>
             `;
           })}
         </div>

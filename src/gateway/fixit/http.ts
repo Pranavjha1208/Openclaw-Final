@@ -33,6 +33,7 @@ import {
   getOrgIdForUser,
   type GetOrCreateFixitSessionResult,
 } from "./mongo-sync.js";
+import { replaceChartJsonBlocks } from "./chart-json.js";
 import { buildFixitSessionKeyForIdentity, resolveFixitAgent } from "./session.js";
 import type { FixitIdentity } from "./types.js";
 import type {
@@ -777,9 +778,10 @@ export async function handleFixitHttpRequest(
       }
       doneSent = true;
       runIdToAbort.delete(runId);
+      const processedText = replaceChartJsonBlocks(fullText);
       writeFixitSseEventLogged({
         type: "done",
-        text: fullText,
+        text: processedText,
         sessionId: sessionUuid,
         runId,
         chatTitle,
@@ -873,12 +875,13 @@ export async function handleFixitHttpRequest(
         }
 
         try {
-          if (fullText.trim()) {
+          const processedFullText = replaceChartJsonBlocks(fullText).trim();
+          if (processedFullText) {
             await recordFixitMessage(
               {
                 userId: effectiveIdentity.userId,
                 sessionObjectId,
-                message: fullText.trim(),
+                message: processedFullText,
                 messageType: "text",
                 messageOwner: "assistant",
                 channelType: FIXIT_UI_CHANNEL,

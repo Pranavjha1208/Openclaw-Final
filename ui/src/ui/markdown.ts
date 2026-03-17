@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
+import { buildQuickChartUrlFromChartJsonSpec } from "./views/quickchart-url.ts";
 
 marked.setOptions({
   gfm: true,
@@ -90,19 +91,43 @@ function installHooks() {
   });
 }
 
+/** Replaces ```chart-json ... ``` blocks with markdown images (QuickChart URL). */
+function preprocessChartJsonBlocks(text: string): string {
+  const blockRe = /```chart-json\n([\s\S]*?)```/g;
+  return text.replace(blockRe, (_, raw) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return "```chart-json\n```";
+    let spec: unknown;
+    try {
+      spec = JSON.parse(trimmed) as unknown;
+    } catch {
+      return "```chart-json\n" + raw + "```";
+    }
+    const url = buildQuickChartUrlFromChartJsonSpec(spec);
+    if (!url) return "```chart-json\n" + raw + "```";
+    const title =
+      typeof spec === "object" && spec !== null && "title" in spec && typeof (spec as { title: unknown }).title === "string"
+        ? (spec as { title: string }).title
+        : "Chart";
+    const alt = title.replace(/\]/g, "\\]");
+    return `\n\n![${alt}](${url})\n\n`;
+  });
+}
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
     return "";
   }
   installHooks();
+  const withCharts = preprocessChartJsonBlocks(input);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(input);
     if (cached !== null) {
       return cached;
     }
   }
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+  const truncated = truncateText(withCharts, MARKDOWN_CHAR_LIMIT);
   const suffix = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";

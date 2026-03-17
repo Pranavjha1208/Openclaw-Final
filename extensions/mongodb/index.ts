@@ -134,6 +134,7 @@ async function getClient(uri: string, options?: MongoClientOptions): Promise<Mon
     options?.serverSelectionTimeoutMS ?? DEFAULT_SERVER_SELECTION_TIMEOUT_MS;
   const connectTimeoutMS = options?.connectTimeoutMS ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const client = new MongoClient(uri, {
+    family: 4,
     serverSelectionTimeoutMS,
     connectTimeoutMS,
   });
